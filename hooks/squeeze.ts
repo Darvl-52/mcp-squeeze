@@ -185,8 +185,9 @@ export const collapseInstances = (code: string) => {
       continue
     }
     // A slot is named by the component's own id of its node, as the line says how to read it here;
-    // its value a JSON string with any `*/` written `*/`, the same string to JSON.parse, so
-    // a text holding one does not end the comment.
+    // its value a JSON string in which the slash of any star-slash is written as the JSON escape
+    // for a slash (backslash, u002f): the same string to JSON.parse, and a text holding a
+    // star-slash no longer ends the comment.
     const differs = slots.filter((s, k) => s.value !== same.slots[k]?.value).map(s => `${s.id} ${JSON.stringify(s.value).replaceAll('*/', '*\\u002f')}`)
     const ids = same.prefix ? `"${prefix}" + its own ids (there after "${same.prefix}")` : `"${prefix}" + its own ids`
     const note = `${' '.repeat(indent + 2)}{/* inside as ${same.label}, node ids ${ids}${differs.length ? `; differs at its own ids: ${differs.join(', ')}` : ''} */}`
