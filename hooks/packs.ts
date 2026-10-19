@@ -1,12 +1,10 @@
 // The packs: each one squeezes the tools of the MCP servers it knows, by what each tool returns. A
-// tool no pack takes passes as it came.
+// tool no pack takes has only what the mod does to every MCP tool (repeats left out).
 import { figma } from './figma.ts'
 
 export type Pack = {
   // How the pack is named in the stats and in `/squeeze <id> off`.
   id: string
-  // How the pack is named in a sentence: "the Figma tools".
-  label: string
   // The names of the servers whose tools the pack takes, whatever a config names them, matched
   // whole and in any case, as they read in a tool's name: `claude_ai_Figma` in
   // `mcp__claude_ai_Figma__get_metadata`.
@@ -30,8 +28,15 @@ export const packOf = (tool: string) => {
   return packs.find(p => isServer(p, server))
 }
 
-// The tools of every pack's servers, for a hook's matcher, so the hook never sees any other.
-export const PACK_TOOL = new RegExp(`^mcp__(?:${packs.map(p => p.server.source).join('|')})__(?:(?!__).)+$`, 'i')
+// Every MCP server's tools, for a hook's matcher, so the hook never sees any other: the server the
+// part of the name before the last `__`.
+export const MCP_TOOL = /^mcp__.+__(?:(?!__).)+$/
 
-// The words for the tools of every pack, in a sentence: "Figma", "Figma and Chrome DevTools".
-export const packsLabel = packs.length < 2 ? (packs[0]?.label ?? '') : `${packs.slice(0, -1).map(p => p.label).join(', ')} and ${packs.at(-1)!.label}`
+// The tools no pack takes, as `/squeeze other off` names them.
+export const OTHER = 'other'
+
+// What `/squeeze <name> on|off` turns: each pack, and the tools no pack takes.
+export const switches = [...packs.map(p => p.id), OTHER]
+
+// The tool's group in the stats: its pack, or else its server.
+export const groupOf = (tool: string) => packOf(tool)?.id ?? tool.slice(5, tool.lastIndexOf('__'))

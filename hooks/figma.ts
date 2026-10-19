@@ -200,7 +200,6 @@ export const collapseInstances = (code: string) => {
 // One text block of a Figma tool's result, squeezed by what the tool is.
 export const figma: Pack = {
   id: 'figma',
-  label: 'Figma',
   // `figma`, `claude_ai_Figma`, `figma-dev-mode`, a plugin's `plugin_figma_figma`.
   server: /.*figma.*/,
   legend: OUTLINE_LEGEND,

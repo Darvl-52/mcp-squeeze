@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { PACK_TOOL, packOf } from '../hooks/packs'
-import { collapseInstances, hoistClasses, imageTokens, outline, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, roundNoise, squeezeText } from '../hooks/squeeze'
+import { MCP_TOOL, packOf } from '../hooks/packs'
+import { collapseInstances, hoistClasses, imageTokens, outline, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, roundNoise, shortenTokens, squeezeText, tokenNote, tokensOf } from '../hooks/squeeze'
 
 const repeatNoteLength = (text: string) => repeatNote(text).length
 
@@ -162,14 +162,14 @@ test('a block returned again is left out once, then comes whole; a compact or an
 test('a /clear starts a new conversation: what was returned and what was kept out start over', async ($, on) => {
   const { call, squeeze, compact, clear } = await session($, on, { mcp__figma__use_figma: [{ type: 'text', text: LONG }] })
   await call('mcp__figma__use_figma')
-  expect(await squeeze()).toMatch(/This conversation: 1 Figma call/)
+  expect(await squeeze()).toMatch(/This conversation: 1 MCP call/)
   await clear()
-  expect(await squeeze()).toMatch(/^MCP squeeze is on\. No Figma tool has answered/)
+  expect(await squeeze()).toMatch(/^MCP squeeze is on\. No MCP tool has answered/)
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
   // A compact starts over what was returned, not what was kept out.
   await compact()
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
-  expect(await squeeze()).toMatch(/This conversation: 2 Figma calls/)
+  expect(await squeeze()).toMatch(/This conversation: 2 MCP calls/)
 })
 
 test('/squeeze-gain says the tokens saved: this conversation, all time past a /clear, by tool', async ($, on) => {
@@ -178,7 +178,7 @@ test('/squeeze-gain says the tokens saved: this conversation, all time past a /c
     mcp__figma__use_figma: [{ type: 'text', text: LONG }],
   })
   expect(await gain()).toBe(
-    "Tokens the Figma tools' results did not bring into the context (text estimated at 3.5 characters a token, an image at a token per 750 pixels):\n\nthis conversation     0 calls  saved ≈      0 tokens  text      0 →      0 (−0%)",
+    "Tokens the MCP tools' results did not bring into the context (text estimated at 3.5 characters a token, an image at a token per 750 pixels):\n\nthis conversation     0 calls  saved ≈      0 tokens  text      0 →      0 (−0%)",
   )
   // Metadata squeezed, then use_figma whole and again left out: what each kept out is summed.
   await call('mcp__figma__get_metadata')
@@ -218,7 +218,7 @@ test('an image returned again is left out once, its size named and its tokens co
   expect(await call('mcp__figma__get_photo')).toEqual([PHOTO])
   expect((await gain())!.split('\n')[2]).toMatch(/^this conversation\s+5 calls  saved ≈\s+\d+ tokens .*  images left out: 1 \(≈ 769\)$/)
   // No text came, so none was squeezed: the note in the image's place counts as no change.
-  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 5 Figma calls, 0 → \d+ characters \(−0%\), 1 repeated image left out; about \d+ tokens kept out of the context\./)
+  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 5 MCP calls, 0 → \d+ characters \(−0%\), 1 repeated image left out; about \d+ tokens kept out of the context\./)
 })
 
 test('text grown by an image\'s note is said to have grown, the sign once', async ($, on) => {
@@ -227,7 +227,7 @@ test('text grown by an image\'s note is said to have grown, the sign once', asyn
   await call('mcp__figma__get_screenshot')
   await call('mcp__figma__get_screenshot')
   const report = (await squeeze())!
-  expect(report).toMatch(/This conversation: 2 Figma calls, 16 → \d+ characters \(\+\d+%\), 1 repeated image left out/)
+  expect(report).toMatch(/This conversation: 2 MCP calls, 16 → \d+ characters \(\+\d+%\), 1 repeated image left out/)
   expect(report).toMatch(/\n  get_screenshot\s+2 ×\s+16 →\s+\d+  \+\d+%\n/)
   expect((await gain())!.split('\n')[2]).toMatch(/text\s+5 →\s+\d+ \(\+\d+%\)  images left out: 1/)
   expect(`${report}${await gain()}`).not.toMatch(/−-|\+-/)
@@ -370,30 +370,31 @@ test('a result with Windows line breaks (\\r\\n) is squeezed as with \\n; one wi
 
 test('/squeeze says what it kept out, and turns it off and on', async ($, on) => {
   const { call, squeeze } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: META }] })
-  expect(await squeeze()).toMatch(/^MCP squeeze is on\. No Figma tool has answered/)
+  expect(await squeeze()).toMatch(/^MCP squeeze is on\. No MCP tool has answered/)
   await call('mcp__figma__get_metadata')
-  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 1 Figma call, \d+ → \d+ characters \(−\d+%\); about \d+ tokens kept out of the context\.\n  get_metadata    1 ×/)
+  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 1 MCP call, \d+ → \d+ characters \(−\d+%\); about \d+ tokens kept out of the context\.\n  get_metadata    1 ×/)
   expect(await squeeze('off')).toMatch(/^MCP squeeze is off\./)
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
   expect(await squeeze('on')).toMatch(/^MCP squeeze is on\./)
-  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (packs: figma)')
+  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (figma, other)')
   expect(await squeeze('chrome off')).toMatch(/^Usage: /)
 })
 
-test('/squeeze <pack> off turns that pack alone off, kept in the store; a tool of no pack passes as it came', async ($, on) => {
+test('/squeeze <pack> off turns that pack alone off, kept in the store; a tool belongs to a pack by its server', async ($, on) => {
   const { call, squeeze, store } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: META }] })
-  expect(await squeeze()).toContain('\nPacks: figma on.\n')
-  expect(await squeeze('figma off')).toMatch(/^MCP squeeze is on\. No Figma tool has answered in this conversation yet\.\nPacks: figma off\.\n/)
+  expect(await squeeze()).toContain('\nPacks: figma on, other on.\n')
+  expect(await squeeze('figma off')).toMatch(/^MCP squeeze is on\. No MCP tool has answered in this conversation yet\.\nPacks: figma off, other on\.\n/)
   expect(store.get('off:figma')).toBe(true)
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
-  expect(await squeeze('Figma  ON')).toContain('\nPacks: figma on.\n')
+  expect(await squeeze('Figma  ON')).toContain('\nPacks: figma on, other on.\n')
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(outline(META))
   expect(packOf('mcp__figma__get_metadata')?.id).toBe('figma')
   expect(packOf('mcp__claude_ai_Figma__use_figma')?.id).toBe('figma')
   expect(packOf('mcp__chrome-devtools__take_snapshot')).toBeUndefined()
-  // Another server's tool named for Figma, as the hook's matcher sees it too.
+  // Another server's tool named for Figma: an MCP tool the hook sees, of no pack.
   expect(packOf('mcp__linear__figma_get_metadata')).toBeUndefined()
-  for (const tool of ['mcp__figma-dev-mode__get_metadata', 'mcp__linear__figma_get_metadata', 'mcp__chrome-devtools__click']) expect(PACK_TOOL.test(tool)).toBe(packOf(tool) !== undefined)
+  for (const tool of ['mcp__figma-dev-mode__get_metadata', 'mcp__linear__figma_get_metadata', 'mcp__chrome-devtools__click']) expect(MCP_TOOL.test(tool)).toBe(true)
+  expect(MCP_TOOL.test('figma_export')).toBe(false)
   // A tool of no MCP server, though its name says figma.
   expect(packOf('figma_export')).toBeUndefined()
 })
@@ -407,4 +408,64 @@ test('the all-time count an earlier version kept, by tool name alone, counts as 
   expect(lines.slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  get_metadata\s+3 calls/)])
   // Kept back under the pack's key, the earlier one gone.
   expect(Object.keys((store.get('total') as { tools: object }).tools)).toEqual(['figma:get_metadata'])
+})
+
+test('a tool no pack takes has its repeats left out too, counted by its server; /squeeze other off lets it be', async ($, on) => {
+  const { call, squeeze, gain } = await session($, on, {
+    'mcp__chrome-devtools__evaluate_script': [{ type: 'text', text: LONG }],
+    mcp__figma__use_figma: [{ type: 'text', text: LONG }],
+  })
+  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
+  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toMatch(/^\[The same \d+ characters this tool returned earlier/)
+  await call('mcp__figma__use_figma')
+  // Two groups answered, so each row names its pack or server.
+  const report = (await squeeze())!
+  expect(report).toMatch(/\n  chrome-devtools evaluate_script\s+2 ×/)
+  expect(report).toMatch(/\n  figma use_figma\s+1 ×/)
+  expect((await gain())!.split('\n').slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  chrome-devtools evaluate_script\s+2 calls/), expect.stringMatching(/^  figma use_figma\s+1 call /)])
+  expect(await squeeze('other off')).toContain('\nPacks: figma on, other off.\n')
+  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
+  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
+  // The Figma pack goes on.
+  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(/^\[The same/)
+})
+
+const JWT = `eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIn0.${'eyJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCJleHAiOjE3OTI0NDM2NDB9'.repeat(2)}.${'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'.repeat(3)}`
+const request = (path: string) => `## Request https://example.test/api/${path}\nStatus: 200\n- authorization:Bearer ${JWT}\n`
+
+test('a long token that came whole before is told by a note, the next whole again; a path or a short token is left as it is', () => {
+  const seen = new Map<string, boolean>()
+  const isRepeat = (key: string) => {
+    const was = seen.get(key) === true
+    seen.set(key, !was)
+    return was
+  }
+  expect(tokensOf(request('a'))).toEqual([JWT])
+  expect(shortenTokens(request('a'), isRepeat)).toBe(request('a'))
+  const second = shortenTokens(request('b'), isRepeat)
+  expect(second).toBe(request('b').replace(JWT, tokenNote(JWT)))
+  expect(second).toContain(`[the same ${JWT.length}-character token as earlier in this conversation, ${JWT.slice(0, 12)}…${JWT.slice(-6)}]`)
+  expect(shortenTokens(request('c'), isRepeat)).toBe(request('c'))
+  // A data URI's base64, past its comma.
+  const png = `data:image/png;base64,${'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'.repeat(4)}`
+  expect(tokensOf(png)).toEqual([png.slice(png.indexOf(',') + 1)])
+  // A long path, a long word, a short token: none is opaque.
+  const path = `/home/${'timePlanning/Department42/'.repeat(8)}`
+  expect(tokensOf(`${path} ${'a'.repeat(200)} eyJhbGciOiJIUzI1NiJ9.e30.abc123XYZ`)).toEqual([])
+})
+
+test('in the results, a token that came whole is told by a note in another; a copy called for again comes with its tokens whole', async ($, on) => {
+  const { call } = await session($, on, {
+    'mcp__chrome-devtools__get_network_request': [{ type: 'text', text: request('a') }],
+    'mcp__chrome-devtools__list_network_requests': [{ type: 'text', text: request('b') }],
+    'mcp__chrome-devtools__list_console_messages': [{ type: 'text', text: request('c') }],
+  })
+  expect(textOf(await call('mcp__chrome-devtools__get_network_request'))).toBe(request('a'))
+  expect(textOf(await call('mcp__chrome-devtools__list_network_requests'))).toBe(request('b').replace(JWT, tokenNote(JWT)))
+  // The same block again is left out whole, its token untouched; the copy after it, called for
+  // again, comes whole, token and all.
+  expect(textOf(await call('mcp__chrome-devtools__get_network_request'))).toMatch(/^\[The same \d+ characters/)
+  expect(textOf(await call('mcp__chrome-devtools__get_network_request'))).toBe(request('a'))
+  // The token came whole there, so in a request after it the note stands again.
+  expect(textOf(await call('mcp__chrome-devtools__list_console_messages'))).toBe(request('c').replace(JWT, tokenNote(JWT)))
 })

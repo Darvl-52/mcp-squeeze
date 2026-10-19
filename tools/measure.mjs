@@ -1,9 +1,8 @@
 // What the mod would have kept out of the MCP tools' results in this machine's past sessions:
 // reads every transcript under the Claude config folder's `projects` (`CLAUDE_CONFIG_DIR`, else
 // `.claude` in the home folder, `HOME` or `USERPROFILE`), squeezes each result as the mod does, a
-// repeat left out within its own conversation, and prints it by server and tool. A server no pack
-// takes passes as it came; its row says what leaving out its repeats would keep out, to weigh a
-// pack for it. A transcript keeps a result as the model read it: one the mod had squeezed already
+// repeat (a block, an image, a long token) left out within its own conversation, and prints it by
+// server and tool: what its pack keeps out, if one takes it, and what its repeats do. A transcript keeps a result as the model read it: one the mod had squeezed already
 // is left out of the count, and the count of those said.
 //
 //   node tools/measure.mjs                       every MCP server
@@ -17,7 +16,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const { hash, imageNote, imageTokens, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, squeezeText } = await import(new URL('../hooks/squeeze.ts', import.meta.url))
+const { hash, imageNote, imageTokens, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, shortenTokens, squeezeText, tokenKey, tokensOf } = await import(new URL('../hooks/squeeze.ts', import.meta.url))
 const { packOf } = await import(new URL('../hooks/packs.ts', import.meta.url))
 
 const argAfter = flag => {
@@ -58,10 +57,11 @@ const samples = []
 // By server, the results the mod had squeezed already when they came.
 const squeezedBefore = {}
 
-// A text the mod had squeezed: a note where a repeat was left out, an outline, a class declared
-// once, an instance told in a line.
+// A text the mod had squeezed: a note where a repeat (a block, a token) was left out, an outline, a
+// class declared once, an instance told in a line.
 const NOTE = /^\[The same [^\n]* this tool returned earlier in this conversation[^\n]*: left out to save context\./
-const wasSqueezed = text => NOTE.test(text) || text.startsWith(OUTLINE_LEGEND) || /^const (?:cn|cls)\d+ = "/m.test(text) || text.includes('{/* inside as ')
+const TOKEN_NOTE = /\[the same \d+-character token as earlier in this conversation, /
+const wasSqueezed = text => NOTE.test(text) || TOKEN_NOTE.test(text) || text.startsWith(OUTLINE_LEGEND) || /^const (?:cn|cls)\d+ = "/m.test(text) || text.includes('{/* inside as ')
 
 for (const file of files) {
   const names = new Map()
@@ -108,10 +108,18 @@ for (const file of files) {
           continue
         }
         if (x.type !== 'text' || typeof x.text !== 'string') continue
+        // As the mod does: a block returned whole before left out, or else its tokens that came whole
+        // before told by a note; the copy called for again whole, tokens and all.
         const text = squeezeText(tool, x.text)
         s.before += x.text.length
         s.packed += text.length
-        s.after += text.length >= REPEAT_MIN && isRepeat(hash(text)) ? repeatNote(text).length : text.length
+        const key = hash(text)
+        const isAgain = text.length >= REPEAT_MIN && seen.get(key) === 'pointed'
+        if (text.length >= REPEAT_MIN && isRepeat(key)) s.after += repeatNote(text).length
+        else if (isAgain) {
+          for (const t of tokensOf(text)) seen.set(tokenKey(t), 'whole')
+          s.after += text.length
+        } else s.after += shortenTokens(text, isRepeat).length
       }
     }
   }
@@ -154,18 +162,12 @@ const rowsOf = ({ server, pack, tools, all }) => [
   ...tools.sort((a, b) => b[1].before - a[1].before).map(([tool, s]) => ({ label: `  ${tool}`, s })),
 ]
 const rows = servers.flatMap(rowsOf)
-const packed = sum(servers.filter(s => s.pack).map(s => s.all))
-const every = sum(servers.map(s => s.all))
-const totals = [
-  { label: 'total, packs (what the mod keeps out)', s: packed },
-  { label: 'total, every server, its repeats left out', s: every },
-]
+const totals = [{ label: 'total', s: sum(servers.map(s => s.all)) }]
 const width = Math.max(...[...rows, ...totals].map(r => r.label.length))
 const line = ({ label, s }) =>
   `${label.padEnd(width)} ${String(s.calls).padStart(6)} ${k(tokens(s.before)).padStart(8)} ${k(byPack(s)).padStart(8)} ${k(byRepeats(s)).padStart(8)} ${`${s.images}${s.images ? ` (${k(s.imageTokens)})` : ''}`.padStart(12)} ${k(saved(s)).padStart(8)} ${String(cost(s) === 0 ? 0 : Math.round((100 * saved(s)) / cost(s))).padStart(4)}%`
 
 console.log(`Tokens estimated at ${CHARS_PER_TOKEN} characters a token, a PNG image at a token per 750 pixels; "of" is of the text and images as they came.`)
-console.log('A server with no pack passes as it came: its row says what leaving out its repeats would keep out.')
 console.log('')
 console.log(`${''.padEnd(width)} ${'calls'.padStart(6)} ${'text'.padStart(8)} ${'by pack'.padStart(8)} ${'repeats'.padStart(8)} ${'images'.padStart(12)} ${'saved ≈'.padStart(8)} ${'of'.padStart(5)}`)
 for (const group of servers) {

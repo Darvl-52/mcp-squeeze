@@ -1,6 +1,6 @@
 {
   "name": "mcp-squeeze",
   "owner": { "name": "Darvl-52" },
-  "description": "A Claude Code mod that squeezes what the Figma MCP tools return before the model reads it.",
-  "plugins": [{ "name": "mcp-squeeze", "source": "./", "version": "0.2.0" }]
+  "description": "A Claude Code mod that squeezes what the MCP tools return before the model reads it.",
+  "plugins": [{ "name": "mcp-squeeze", "source": "./", "version": "0.3.0" }]
 }

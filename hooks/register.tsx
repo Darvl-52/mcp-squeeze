@@ -2,16 +2,17 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Seen, Stat, Total } from '../types'
-import { PACK_TOOL, packOf, packs, packsLabel } from './packs'
-import { hash, imageNote, imageTokens, pngSize, REPEAT_MIN, repeatNote, squeezeText } from './squeeze'
+import { groupOf, MCP_TOOL, OTHER, packOf, switches } from './packs'
+import { hash, imageNote, imageTokens, pngSize, REPEAT_MIN, repeatNote, shortenTokens, squeezeText, tokenKey, tokensOf } from './squeeze'
 
-// Each agent's blocks returned this conversation, by hash: `whole` the last copy went whole, so the
-// next is left out; `pointed` it was left out, so the next goes whole. By agent, '' the main one.
+// Each agent's blocks, images and tokens returned this conversation, by hash: `whole` the last copy
+// went whole, so the next is left out; `pointed` it was left out, so the next goes whole. By agent,
+// '' the main one.
 const seenAtom = atom({ plugin: 'mcp-squeeze', key: 'seen' } as const, {} as Record<string, Seen>)
 const statsAtom = atom({ plugin: 'mcp-squeeze', key: 'stats' } as const, {} as Record<string, Stat>)
 
 const OFF_KEY = 'off'
-// Kept true while a pack is off, by itself: `off:figma`.
+// Kept true while a pack, or the tools no pack takes, is off by itself: `off:figma`, `off:other`.
 const packOffKey = (pack: string) => `off:${pack}`
 // What it has kept out since it was first on, across sessions (Total).
 const TOTAL_KEY = 'total'
@@ -47,8 +48,8 @@ const imageOf = (b: Block) => {
   return data === undefined ? undefined : { data, mimeType }
 }
 
-// The blocks squeezed, a block returned whole before left out; with the images left out and the
-// tokens they would have cost.
+// The blocks squeezed, a block returned whole before left out, a token that came whole before told
+// by a note; with the images left out and the tokens they would have cost.
 async function squeeze($: EngineInterface, tool: string, agent: string, blocks: readonly Block[]) {
   const seen = { ...((await read($, seenAtom))[agent] ?? {}) }
   let images = 0
@@ -71,9 +72,15 @@ async function squeeze($: EngineInterface, tool: string, agent: string, blocks: 
       return { type: 'text', text: imageNote(image.mimeType, size) }
     }
     if (b.type !== 'text' || typeof b.text !== 'string') return b
-    const text = squeezeText(tool, b.text)
-    if (text.length < REPEAT_MIN) return text === b.text ? b : { ...b, text }
-    return { ...b, text: isRepeat(hash(text)) ? repeatNote(text) : text }
+    const squeezed = squeezeText(tool, b.text)
+    const key = hash(squeezed)
+    // The copy after one left out is the one the model called for again, its earlier copy out of
+    // view: its tokens come whole too.
+    const isAgain = squeezed.length >= REPEAT_MIN && seen[key] === 'pointed'
+    if (squeezed.length >= REPEAT_MIN && isRepeat(key)) return { ...b, text: repeatNote(squeezed) }
+    if (isAgain) for (const t of tokensOf(squeezed)) seen[tokenKey(t)] = 'whole'
+    const text = isAgain ? squeezed : shortenTokens(squeezed, isRepeat)
+    return text === b.text ? b : { ...b, text }
   })
   await update($, seenAtom, all => ({ ...all, [agent]: seen }))
   return { blocks: out, images, imageCost }
@@ -110,8 +117,8 @@ const sum = (stats: Readonly<Record<string, Stat>> | readonly Stat[]) =>
     { calls: 0, before: 0, after: 0, images: 0, imageTokens: 0 } as Stat,
   )
 
-// A stat's key, `<pack>:<tool>`; a key an earlier version kept is a tool's name alone, of the Figma
-// pack, the only one it had.
+// A stat's key, `<pack>:<tool>`, or `<server>:<tool>` for a tool no pack takes; a key an earlier
+// version kept is a tool's name alone, of the Figma pack, the only one it had.
 const keyOf = (pack: string, tool: string) => `${pack}:${tool}`
 const splitKey = (key: string) => {
   const at = key.indexOf(':')
@@ -129,7 +136,8 @@ const keyed = (stats: Readonly<Record<string, Stat>>) => {
   return out
 }
 
-// How a row is named: by its tool alone while one pack has answered, by pack and tool past that.
+// How a row is named: by its tool alone while one pack or server has answered, by it and the tool
+// past that.
 const namer = (keys: readonly string[]) => {
   const isMany = new Set(keys.map(k => splitKey(k).pack)).size > 1
   return (key: string) => {
@@ -170,18 +178,18 @@ function gain(conversation: Readonly<Record<string, Stat>>, total: Total | undef
     .map(([k, s]) => [name(k), s] as const)
   const width = Math.max(`all time, since ${since}`.length, ...tools.map(([t]) => t.length + 2))
   return [
-    `Tokens the ${packsLabel} tools' results did not bring into the context (text estimated at ${CHARS_PER_TOKEN} characters a token, an image at a token per 750 pixels):`,
+    `Tokens the MCP tools' results did not bring into the context (text estimated at ${CHARS_PER_TOKEN} characters a token, an image at a token per 750 pixels):`,
     '',
     gainLine('this conversation', sum(conversation), width),
     ...(total ? [gainLine(`all time, since ${since}`, sum(total.tools), width), '', 'By tool, all time:', ...tools.map(([t, s]) => gainLine(`  ${t}`, s, width))] : []),
   ].join('\n')
 }
 
-const FOOT = '/squeeze off turns it off, /squeeze on back on; /squeeze <pack> off one pack alone; /squeeze-gain says the tokens saved, all time too.'
-const USAGE = `Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (packs: ${packs.map(p => p.id).join(', ')})`
+const FOOT = `/squeeze off turns it off, /squeeze on back on; /squeeze <pack> off one pack alone, /squeeze ${OTHER} off the tools no pack takes; /squeeze-gain says the tokens saved, all time too.`
+const USAGE = `Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (${switches.join(', ')})`
 
-// Each pack, on or off by itself: "Packs: figma on."
-const packsLine = (offPacks: ReadonlySet<string>) => `Packs: ${packs.map(p => `${p.id} ${offPacks.has(p.id) ? 'off' : 'on'}`).join(', ')}.`
+// Each pack, and the tools no pack takes, on or off by itself: "Packs: figma on, other on."
+const packsLine = (offPacks: ReadonlySet<string>) => `Packs: ${switches.map(p => `${p} ${offPacks.has(p) ? 'off' : 'on'}`).join(', ')}.`
 
 function report(stats: Readonly<Record<string, Stat>>, isOn: boolean, offPacks: ReadonlySet<string>) {
   const name = namer(Object.keys(stats))
@@ -190,11 +198,11 @@ function report(stats: Readonly<Record<string, Stat>>, isOn: boolean, offPacks: 
     .map(([k, s]) => [name(k), s] as const)
   const all = sum(stats)
   const head = `MCP squeeze is ${isOn ? 'on' : 'off'}.`
-  if (all.calls === 0) return `${head} No ${packsLabel} tool has answered in this conversation yet.\n${packsLine(offPacks)}\n${FOOT}`
+  if (all.calls === 0) return `${head} No MCP tool has answered in this conversation yet.\n${packsLine(offPacks)}\n${FOOT}`
   const width = Math.max(...rows.map(([t]) => t.length))
   const images = all.images ? `, ${all.images} repeated ${all.images === 1 ? 'image' : 'images'} left out` : ''
   return [
-    `${head} This conversation: ${all.calls} ${packsLabel} ${all.calls === 1 ? 'call' : 'calls'}, ${kilo(all.before)} → ${kilo(all.after)} characters (${change(all)})${images}; about ${kilo(saved(all))} tokens kept out of the context.`,
+    `${head} This conversation: ${all.calls} MCP ${all.calls === 1 ? 'call' : 'calls'}, ${kilo(all.before)} → ${kilo(all.after)} characters (${change(all)})${images}; about ${kilo(saved(all))} tokens kept out of the context.`,
     ...rows.map(([t, r]) => `  ${t.padEnd(width)}  ${String(r.calls).padStart(3)} × ${kilo(r.before).padStart(6)} → ${kilo(r.after).padStart(6)}  ${change(r)}`),
     packsLine(offPacks),
     FOOT,
@@ -206,14 +214,14 @@ const isPackOnIn = async ($: EngineInterface, pack: string) => (await $.store.ge
 
 async function offPacksIn($: EngineInterface) {
   const off = new Set<string>()
-  for (const p of packs) if (!(await isPackOnIn($, p.id))) off.add(p.id)
+  for (const p of switches) if (!(await isPackOnIn($, p))) off.add(p)
   return off
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'squeeze', description: `What squeezing the ${packsLabel} MCP tools has kept out of the context; on or off, all or one pack`, argumentHint: '[on|off|<pack> on|<pack> off]' })
-    await $.command.register({ name: 'squeeze-gain', description: `Tokens squeezing the ${packsLabel} MCP tools has saved: this conversation, all time, by tool` })
+    await $.command.register({ name: 'squeeze', description: 'What squeezing the MCP tools has kept out of the context; on or off, all or one pack', argumentHint: '[on|off|<pack> on|<pack> off]' })
+    await $.command.register({ name: 'squeeze-gain', description: 'Tokens squeezing the MCP tools has saved: this conversation, all time, by tool' })
     return next(e)
   })
 
@@ -238,13 +246,12 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // The result of a tool some pack takes is squeezed after it ran; an error, a shape it does not
-  // know, or a pack turned off passes as it came, as does any other tool, which the hook never sees.
-  on('tool.call', { tool: PACK_TOOL }, async ($, e, next) => {
-    const pack = packOf(e.tool)
-    if (!pack) return next(e)
+  // An MCP tool's result is squeezed after it ran, by its pack if one takes it; an error, a shape it
+  // does not know, or a pack turned off passes as it came, as does a tool of no MCP server, which the
+  // hook never sees.
+  on('tool.call', { tool: MCP_TOOL }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError || !(await isOnIn($)) || !(await isPackOnIn($, pack.id))) return ran
+    if (ran.deny !== undefined || ran.isError || !(await isOnIn($)) || !(await isPackOnIn($, packOf(e.tool)?.id ?? OTHER))) return ran
     const found = blocksOf(ran.result)
     if (!found) return ran
     const { blocks, images, imageCost } = await squeeze($, e.tool, e.agentId ?? '', found.blocks)
@@ -253,7 +260,7 @@ export const register: Register = on => {
     const before = textLength(found.blocks)
     const after = isChanged ? textLength(blocks) : before
     const call = { before, after, images, imageTokens: imageCost }
-    const key = keyOf(pack.id, e.tool.slice(e.tool.lastIndexOf('__') + 2))
+    const key = keyOf(groupOf(e.tool), e.tool.slice(e.tool.lastIndexOf('__') + 2))
     await update($, statsAtom, was => {
       const s = keyed(was)
       return { ...s, [key]: added(s[key], call) }
@@ -268,7 +275,7 @@ export const register: Register = on => {
     const [first, second] = args
     const isSwitch = (word: string | undefined) => word === 'on' || word === 'off'
     if (args.length === 1 && isSwitch(first)) await $.store.set(OFF_KEY, first === 'off')
-    else if (args.length === 2 && packs.some(p => p.id === first) && isSwitch(second)) await $.store.set(packOffKey(first!), second === 'off')
+    else if (args.length === 2 && switches.includes(first!) && isSwitch(second)) await $.store.set(packOffKey(first!), second === 'off')
     else if (args.length !== 0) return { text: USAGE }
     return { text: report(keyed(await read($, statsAtom)), await isOnIn($), await offPacksIn($)) }
   })

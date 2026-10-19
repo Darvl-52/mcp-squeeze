@@ -23,6 +23,27 @@ export const squeezeText = (tool: string, text: string) => {
   return out.length < lf.length ? out : text
 }
 
+// An opaque token written out long: a JWT, or a run of base64 (or base64url).
+const TOKEN = /\beyJ[\w-]+\.[\w-]+\.[\w-]+|(?<![\w+/=-])[A-Za-z0-9+/_-]+={0,2}(?![\w+/=-])/g
+// A token this long or longer is told by a note where it came whole before.
+export const TOKEN_MIN = 160
+
+// Long, with capitals, small letters and digits, as random bytes written out are, and no path:
+// base64 has a slash in 64 characters, a path one every few.
+const isOpaque = (t: string) => t.length >= TOKEN_MIN && /[A-Z]/.test(t) && /[a-z]/.test(t) && /\d/.test(t) && (t.match(/\//g)?.length ?? 0) * 16 < t.length
+
+// The opaque tokens of a text, as they are written.
+export const tokensOf = (text: string) => [...text.matchAll(TOKEN)].map(m => m[0]).filter(isOpaque)
+
+export const tokenKey = (token: string) => `token:${hash(token)}`
+
+export const tokenNote = (token: string) => `[the same ${token.length}-character token as earlier in this conversation, ${token.slice(0, 12)}…${token.slice(-6)}]`
+
+// A text with each opaque token `isRepeat` says to leave out told by a note: the token stays in the
+// context where it came whole before (a bearer token in every request of a page, a data URI).
+export const shortenTokens = (text: string, isRepeat: (key: string) => boolean) =>
+  text.replace(TOKEN, t => (isOpaque(t) && isRepeat(tokenKey(t)) ? tokenNote(t) : t))
+
 // A block this long or longer is left out where it was returned whole before.
 export const REPEAT_MIN = 300
 

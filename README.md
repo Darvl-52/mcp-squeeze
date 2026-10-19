@@ -1,9 +1,9 @@
 # mcp-squeeze
 
-A Claude Code mod that squeezes what the Figma MCP tools return before the model reads it. Each
-result a Figma tool sends lands in the context and stays there for the rest of the conversation;
-the mod keeps what the model acts on (node ids, names, positions, sizes, every class) and drops
-what only repeats it or spells it long.
+A Claude Code mod that squeezes what the MCP tools return before the model reads it. Each result
+an MCP tool sends lands in the context and stays there for the rest of the conversation; the mod
+keeps what the model acts on and drops what only repeats it or spells it long: a repeat from any
+server, and for the servers it has a pack for (Figma, for now), what their results spell long.
 
 Over 1,600 Figma calls of past sessions it kept out about 23% of their text and 39 repeated
 images: about 235k tokens. `get_metadata` comes out at half its size, a large
@@ -11,11 +11,24 @@ images: about 235k tokens. `get_metadata` comes out at half its size, a large
 
 ## What it does
 
-It works by packs, one for each kind of MCP server it knows; for now there is one, `figma`, which
-takes the Figma servers' tools, whatever a config names the server (`figma`, `claude_ai_Figma`,
-`figma-dev-mode`, the Figma plugin's `plugin_figma_figma`). A tool no pack takes, an error, and a
-result in a shape it does not know pass as they came. A result sent with Windows line breaks
-(`\r\n`) is squeezed as any other. Each pack is a file in `hooks/` listed in `hooks/packs.ts`.
+It works on every MCP server's tools; an error and a result in a shape it does not know pass as
+they came, and a result sent with Windows line breaks (`\r\n`) is squeezed as any other.
+
+For every MCP tool:
+
+- **A repeat left out.** A block, or a PNG image, a tool returns again in the same conversation
+  becomes a short note saying so; the copy after it comes whole again, so the model can always
+  get it back. A compact, a `/clear` and each subagent start over. Where an organization manages
+  Claude Code, a compact does not reach a mod a person installed: there the note after a compact
+  may name a copy the summary took the place of, and calling the tool again brings it whole.
+- **A long token told once.** A JWT, or a run of base64 (a data URI's, say) 160 characters or
+  longer, that came whole earlier in the conversation becomes a note naming its length, how it
+  starts and how it ends: a bearer token in every request of a page comes once. The token after a
+  note comes whole again, and so does each token of a block called for again after one left out.
+
+And a pack for each kind of MCP server it knows, a file in `hooks/` listed in `hooks/packs.ts`;
+for now there is one, `figma`, which takes the Figma servers' tools, whatever a config names the
+server (`figma`, `claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin_figma_figma`):
 
 - **`get_metadata` as an outline.** One node a line, closing tags dropped since the indent says
   where a node ends, a name that is only the node's type (`Frame`, `Group`) left out:
@@ -45,11 +58,6 @@ result in a shape it does not know pass as they came. A result sent with Windows
   the component, `className={cn1}` where it was; the code means the same, the value kept exactly.
 - **Float noise rounded.** A float32 value written out whole, `1.1299999952316284`, becomes the
   shortest writing of the same float32, `1.13`; any other number is left as it is.
-- **A repeat left out.** A block, or a PNG image, a tool returns again in the same conversation
-  becomes a short note saying so; the copy after it comes whole again, so the model can always
-  get it back. A compact, a `/clear` and each subagent start over. Where an organization manages
-  Claude Code, a compact does not reach a mod a person installed: there the note after a compact
-  may name a copy the summary took the place of, and calling the tool again brings it whole.
 
 ## Commands
 
@@ -59,6 +67,7 @@ result in a shape it does not know pass as they came. A result sent with Windows
 | `/squeeze`           | Whether it is on, and what it kept out this conversation.      |
 | `/squeeze off`       | Turn it off, kept for every session; `/squeeze on` back on.    |
 | `/squeeze figma off` | Turn one pack off, the others on; `/squeeze figma on` back on. |
+| `/squeeze other off` | Leave the tools no pack takes as they come; `on` back on.      |
 
 The tokens are an estimate: text at 3.5 characters a token, an image at a token per 750 pixels.
 No API counts the tokens of a text without a model call that would cost about what it saves.
