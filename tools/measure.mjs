@@ -57,11 +57,13 @@ const samples = []
 // By server, the results the mod had squeezed already when they came.
 const squeezedBefore = {}
 
-// A text the mod had squeezed: a note where a repeat (a block, a token) was left out, an outline, a
-// class declared once, an instance told in a line.
+// A text the mod had squeezed: of any tool, a note where a repeat (a block, an image, a token) was
+// left out, which only the mod writes; of a Figma tool, an outline, a class declared once, an
+// instance told in a line, which another server's code may well hold of its own.
 const NOTE = /^\[The same [^\n]* this tool returned earlier in this conversation[^\n]*: left out to save context\./
 const TOKEN_NOTE = /\[the same \d+-character token as earlier in this conversation, /
-const wasSqueezed = text => NOTE.test(text) || TOKEN_NOTE.test(text) || text.startsWith(OUTLINE_LEGEND) || /^const (?:cn|cls)\d+ = "/m.test(text) || text.includes('{/* inside as ')
+const wasSqueezed = (tool, text) =>
+  NOTE.test(text) || TOKEN_NOTE.test(text) || (packOf(tool)?.id === 'figma' && (text.startsWith(OUTLINE_LEGEND) || /^const (?:cn|cls)\d+ = "/m.test(text) || text.includes('{/* inside as ')))
 
 for (const file of files) {
   const names = new Map()
@@ -88,7 +90,7 @@ for (const file of files) {
       const [, server, short] = MCP_TOOL.exec(tool)
       if (serverFilter !== undefined && !server.toLowerCase().includes(serverFilter)) continue
       const blocks = typeof b.content === 'string' ? [{ type: 'text', text: b.content }] : Array.isArray(b.content) ? b.content : []
-      if (blocks.some(x => x.type === 'text' && typeof x.text === 'string' && wasSqueezed(x.text))) {
+      if (blocks.some(x => x.type === 'text' && typeof x.text === 'string' && wasSqueezed(tool, x.text))) {
         squeezedBefore[server] = (squeezedBefore[server] ?? 0) + 1
         continue
       }
