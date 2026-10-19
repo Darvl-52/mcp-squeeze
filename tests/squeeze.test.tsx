@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import { PACK_TOOL, packOf } from '../hooks/packs'
 import { collapseInstances, hoistClasses, imageTokens, outline, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, roundNoise, squeezeText } from '../hooks/squeeze'
 
 const repeatNoteLength = (text: string) => repeatNote(text).length
@@ -375,5 +376,35 @@ test('/squeeze says what it kept out, and turns it off and on', async ($, on) =>
   expect(await squeeze('off')).toMatch(/^MCP squeeze is off\./)
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
   expect(await squeeze('on')).toMatch(/^MCP squeeze is on\./)
-  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off')
+  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (packs: figma)')
+  expect(await squeeze('chrome off')).toMatch(/^Usage: /)
+})
+
+test('/squeeze <pack> off turns that pack alone off, kept in the store; a tool of no pack passes as it came', async ($, on) => {
+  const { call, squeeze, store } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: META }] })
+  expect(await squeeze()).toContain('\nPacks: figma on.\n')
+  expect(await squeeze('figma off')).toMatch(/^MCP squeeze is on\. No Figma tool has answered in this conversation yet\.\nPacks: figma off\.\n/)
+  expect(store.get('off:figma')).toBe(true)
+  expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
+  expect(await squeeze('Figma  ON')).toContain('\nPacks: figma on.\n')
+  expect(textOf(await call('mcp__figma__get_metadata'))).toBe(outline(META))
+  expect(packOf('mcp__figma__get_metadata')?.id).toBe('figma')
+  expect(packOf('mcp__claude_ai_Figma__use_figma')?.id).toBe('figma')
+  expect(packOf('mcp__chrome-devtools__take_snapshot')).toBeUndefined()
+  // Another server's tool named for Figma, as the hook's matcher sees it too.
+  expect(packOf('mcp__linear__figma_get_metadata')).toBeUndefined()
+  for (const tool of ['mcp__figma-dev-mode__get_metadata', 'mcp__linear__figma_get_metadata', 'mcp__chrome-devtools__click']) expect(PACK_TOOL.test(tool)).toBe(packOf(tool) !== undefined)
+  // A tool of no MCP server, though its name says figma.
+  expect(packOf('figma_export')).toBeUndefined()
+})
+
+test('the all-time count an earlier version kept, by tool name alone, counts as the Figma pack\'s', async ($, on) => {
+  const { call, gain, store } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: META }] })
+  store.set('total', { since: Date.UTC(2026, 9, 1), tools: { get_metadata: { calls: 2, before: 7000, after: 3500 } } })
+  await call('mcp__figma__get_metadata')
+  const lines = (await gain())!.split('\n')
+  expect(lines[3]).toMatch(/^all time, since 2026-10-01\s+3 calls/)
+  expect(lines.slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  get_metadata\s+3 calls/)])
+  // Kept back under the pack's key, the earlier one gone.
+  expect(Object.keys((store.get('total') as { tools: object }).tools)).toEqual(['figma:get_metadata'])
 })

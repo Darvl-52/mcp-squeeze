@@ -1,6 +1,6 @@
 {
   "name": "mcp-squeeze",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Squeezes what the Figma MCP tools return before the model reads it: metadata as an outline, an instance whose inside is its component's told in a line, repeated classes declared once, float noise rounded, a block or an image returned again left out; /squeeze-gain says the tokens saved.",
   "types": "./types/index.d.ts",
   "author": { "name": "Darvl-52" },

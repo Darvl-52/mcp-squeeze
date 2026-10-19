@@ -16,8 +16,10 @@ const files = []
 const walk = dir => {
   for (const name of readdirSync(dir)) {
     const path = join(dir, name)
-    if (statSync(path).isDirectory()) walk(path)
-    else if (name.endsWith('.jsonl')) files.push(path)
+    // A subagent's transcript can be a link to one that is gone.
+    const stat = statSync(path, { throwIfNoEntry: false })
+    if (stat?.isDirectory()) walk(path)
+    else if (stat && name.endsWith('.jsonl')) files.push(path)
   }
 }
 const config = process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME || process.env.USERPROFILE || homedir(), '.claude')

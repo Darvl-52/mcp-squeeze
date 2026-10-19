@@ -11,10 +11,11 @@ images: about 235k tokens. `get_metadata` comes out at half its size, a large
 
 ## What it does
 
-It works on the Figma servers' tools, whatever a config names the server (`figma`,
-`claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin_figma_figma`); every other tool, an
-error, and a result in a shape it does not know pass as they came. A result sent with Windows line
-breaks (`\r\n`) is squeezed as any other.
+It works by packs, one for each kind of MCP server it knows; for now there is one, `figma`, which
+takes the Figma servers' tools, whatever a config names the server (`figma`, `claude_ai_Figma`,
+`figma-dev-mode`, the Figma plugin's `plugin_figma_figma`). A tool no pack takes, an error, and a
+result in a shape it does not know pass as they came. A result sent with Windows line breaks
+(`\r\n`) is squeezed as any other. Each pack is a file in `hooks/` listed in `hooks/packs.ts`.
 
 - **`get_metadata` as an outline.** One node a line, closing tags dropped since the indent says
   where a node ends, a name that is only the node's type (`Frame`, `Group`) left out:
@@ -52,11 +53,12 @@ breaks (`\r\n`) is squeezed as any other.
 
 ## Commands
 
-| Command          | What it does                                                         |
-| ---------------- | -------------------------------------------------------------------- |
-| `/squeeze-gain`  | The tokens saved: this conversation, all time, by tool.              |
-| `/squeeze`       | Whether it is on, and what it kept out this conversation.            |
-| `/squeeze off`   | Turn it off, kept for every session; `/squeeze on` back on.          |
+| Command              | What it does                                                   |
+| -------------------- | -------------------------------------------------------------- |
+| `/squeeze-gain`      | The tokens saved: this conversation, all time, by tool.        |
+| `/squeeze`           | Whether it is on, and what it kept out this conversation.      |
+| `/squeeze off`       | Turn it off, kept for every session; `/squeeze on` back on.    |
+| `/squeeze figma off` | Turn one pack off, the others on; `/squeeze figma on` back on. |
 
 The tokens are an estimate: text at 3.5 characters a token, an image at a token per 750 pixels.
 No API counts the tokens of a text without a model call that would cost about what it saves.
