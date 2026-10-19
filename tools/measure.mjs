@@ -16,7 +16,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const { hash, imageNote, imageTokens, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, shortenTokens, squeezeText, tokenKey, tokensOf } = await import(new URL('../hooks/squeeze.ts', import.meta.url))
+const { hash, imageNote, imageTokens, isRepeatIn, OUTLINE_LEGEND, pngSize, squeezeBlock, squeezeText } = await import(new URL('../hooks/squeeze.ts', import.meta.url))
 const { packOf } = await import(new URL('../hooks/packs.ts', import.meta.url))
 
 const argAfter = flag => {
@@ -67,12 +67,7 @@ const wasSqueezed = (tool, text) =>
 
 for (const file of files) {
   const names = new Map()
-  const seen = new Map()
-  const isRepeat = key => {
-    const was = seen.get(key) === 'whole'
-    seen.set(key, was ? 'pointed' : 'whole')
-    return was
-  }
+  const seen = {}
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
     if (!line.includes('mcp__') && !line.includes('tool_result')) continue
     let record
@@ -103,25 +98,17 @@ for (const file of files) {
           const size = typeof data === 'string' ? pngSize(data) : undefined
           if (!size) continue
           s.allImageTokens += imageTokens(size)
-          if (!isRepeat(`image:${hash(data)}`)) continue
+          if (!isRepeatIn(seen, `image:${hash(data)}`)) continue
           s.images++
           s.imageTokens += imageTokens(size)
           s.after += imageNote(x.source?.media_type ?? 'image', size).length
           continue
         }
         if (x.type !== 'text' || typeof x.text !== 'string') continue
-        // As the mod does: a block returned whole before left out, or else its tokens that came whole
-        // before told by a note; the copy called for again whole, tokens and all.
-        const text = squeezeText(tool, x.text)
+        const { packed, text } = squeezeBlock(tool, x.text, seen)
         s.before += x.text.length
-        s.packed += text.length
-        const key = hash(text)
-        const isAgain = text.length >= REPEAT_MIN && seen.get(key) === 'pointed'
-        if (text.length >= REPEAT_MIN && isRepeat(key)) s.after += repeatNote(text).length
-        else if (isAgain) {
-          for (const t of tokensOf(text)) seen.set(tokenKey(t), 'whole')
-          s.after += text.length
-        } else s.after += shortenTokens(text, isRepeat).length
+        s.packed += packed.length
+        s.after += text.length
       }
     }
   }
@@ -169,7 +156,7 @@ const width = Math.max(...[...rows, ...totals].map(r => r.label.length))
 const line = ({ label, s }) =>
   `${label.padEnd(width)} ${String(s.calls).padStart(6)} ${k(tokens(s.before)).padStart(8)} ${k(byPack(s)).padStart(8)} ${k(byRepeats(s)).padStart(8)} ${`${s.images}${s.images ? ` (${k(s.imageTokens)})` : ''}`.padStart(12)} ${k(saved(s)).padStart(8)} ${String(cost(s) === 0 ? 0 : Math.round((100 * saved(s)) / cost(s))).padStart(4)}%`
 
-console.log(`Tokens estimated at ${CHARS_PER_TOKEN} characters a token, a PNG image at a token per 750 pixels; "of" is of the text and images as they came.`)
+console.log(`Tokens estimated at ${CHARS_PER_TOKEN} characters a token, a PNG image at a token per 750 pixels; "repeats" is a block, a state line and a token said before; "of" is of the text and images as they came.`)
 console.log('')
 console.log(`${''.padEnd(width)} ${'calls'.padStart(6)} ${'text'.padStart(8)} ${'by pack'.padStart(8)} ${'repeats'.padStart(8)} ${'images'.padStart(12)} ${'saved ≈'.padStart(8)} ${'of'.padStart(5)}`)
 for (const group of servers) {

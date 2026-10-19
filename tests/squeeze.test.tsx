@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import { unescapeSnapshot, unescapeUrl } from '../hooks/chrome'
 import { MCP_TOOL, packOf } from '../hooks/packs'
 import { collapseInstances, hoistClasses, imageTokens, outline, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, roundNoise, shortenTokens, squeezeText, tokenNote, tokensOf } from '../hooks/squeeze'
 
@@ -376,21 +377,22 @@ test('/squeeze says what it kept out, and turns it off and on', async ($, on) =>
   expect(await squeeze('off')).toMatch(/^MCP squeeze is off\./)
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
   expect(await squeeze('on')).toMatch(/^MCP squeeze is on\./)
-  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (figma, other)')
-  expect(await squeeze('chrome off')).toMatch(/^Usage: /)
+  expect(await squeeze('maybe')).toBe('Usage: /squeeze, /squeeze on, /squeeze off, /squeeze <pack> on, /squeeze <pack> off (figma, chrome, other)')
+  expect(await squeeze('slack off')).toMatch(/^Usage: /)
 })
 
 test('/squeeze <pack> off turns that pack alone off, kept in the store; a tool belongs to a pack by its server', async ($, on) => {
   const { call, squeeze, store } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: META }] })
-  expect(await squeeze()).toContain('\nPacks: figma on, other on.\n')
-  expect(await squeeze('figma off')).toMatch(/^MCP squeeze is on\. No MCP tool has answered in this conversation yet\.\nPacks: figma off, other on\.\n/)
+  expect(await squeeze()).toContain('\nPacks: figma on, chrome on, other on.\n')
+  expect(await squeeze('figma off')).toMatch(/^MCP squeeze is on\. No MCP tool has answered in this conversation yet\.\nPacks: figma off, chrome on, other on\.\n/)
   expect(store.get('off:figma')).toBe(true)
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(META)
-  expect(await squeeze('Figma  ON')).toContain('\nPacks: figma on, other on.\n')
+  expect(await squeeze('Figma  ON')).toContain('\nPacks: figma on, chrome on, other on.\n')
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(outline(META))
   expect(packOf('mcp__figma__get_metadata')?.id).toBe('figma')
   expect(packOf('mcp__claude_ai_Figma__use_figma')?.id).toBe('figma')
-  expect(packOf('mcp__chrome-devtools__take_snapshot')).toBeUndefined()
+  expect(packOf('mcp__chrome-devtools__take_snapshot')?.id).toBe('chrome')
+  expect(packOf('mcp__linear__list_issues')).toBeUndefined()
   // Another server's tool named for Figma: an MCP tool the hook sees, of no pack.
   expect(packOf('mcp__linear__figma_get_metadata')).toBeUndefined()
   for (const tool of ['mcp__figma-dev-mode__get_metadata', 'mcp__linear__figma_get_metadata', 'mcp__chrome-devtools__click']) expect(MCP_TOOL.test(tool)).toBe(true)
@@ -412,20 +414,20 @@ test('the all-time count an earlier version kept, by tool name alone, counts as 
 
 test('a tool no pack takes has its repeats left out too, counted by its server; /squeeze other off lets it be', async ($, on) => {
   const { call, squeeze, gain } = await session($, on, {
-    'mcp__chrome-devtools__evaluate_script': [{ type: 'text', text: LONG }],
+    mcp__linear__list_issues: [{ type: 'text', text: LONG }],
     mcp__figma__use_figma: [{ type: 'text', text: LONG }],
   })
-  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
-  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toMatch(/^\[The same \d+ characters this tool returned earlier/)
+  expect(textOf(await call('mcp__linear__list_issues'))).toBe(LONG)
+  expect(textOf(await call('mcp__linear__list_issues'))).toMatch(/^\[The same \d+ characters this tool returned earlier/)
   await call('mcp__figma__use_figma')
   // Two groups answered, so each row names its pack or server.
   const report = (await squeeze())!
-  expect(report).toMatch(/\n  chrome-devtools evaluate_script\s+2 ×/)
+  expect(report).toMatch(/\n  linear list_issues\s+2 ×/)
   expect(report).toMatch(/\n  figma use_figma\s+1 ×/)
-  expect((await gain())!.split('\n').slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  chrome-devtools evaluate_script\s+2 calls/), expect.stringMatching(/^  figma use_figma\s+1 call /)])
-  expect(await squeeze('other off')).toContain('\nPacks: figma on, other off.\n')
-  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
-  expect(textOf(await call('mcp__chrome-devtools__evaluate_script'))).toBe(LONG)
+  expect((await gain())!.split('\n').slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  linear list_issues\s+2 calls/), expect.stringMatching(/^  figma use_figma\s+1 call /)])
+  expect(await squeeze('other off')).toContain('\nPacks: figma on, chrome on, other off.\n')
+  expect(textOf(await call('mcp__linear__list_issues'))).toBe(LONG)
+  expect(textOf(await call('mcp__linear__list_issues'))).toBe(LONG)
   // The Figma pack goes on.
   expect(textOf(await call('mcp__figma__use_figma'))).toMatch(/^\[The same/)
 })
@@ -468,4 +470,41 @@ test('in the results, a token that came whole is told by a note in another; a co
   expect(textOf(await call('mcp__chrome-devtools__get_network_request'))).toBe(request('a'))
   // The token came whole there, so in a request after it the note stands again.
   expect(textOf(await call('mcp__chrome-devtools__list_console_messages'))).toBe(request('c').replace(JWT, tokenNote(JWT)))
+})
+
+test('a Chrome snapshot\'s URLs spell their letters past ASCII as themselves; an escaped ASCII character, a hidden one, or a URL outside the snapshot stays', () => {
+  const title = '%D0%A1%D0%BE%D0%B7%D0%B4%D0%B0%D1%82%D1%8C+%D0%BF%D0%BB%D0%B0%D0%BD'
+  expect(unescapeUrl(`https://x.test/create?title=${title}`)).toBe('https://x.test/create?title=Создать+план')
+  expect(unescapeUrl('/a%20b%2Fc%26d%3Fe')).toBe('/a%20b%2Fc%26d%3Fe')
+  // No UTF-8 (a lead byte with an ASCII one after it), a no-break space, a zero-width space.
+  expect(unescapeUrl('%D0%41 %C2%A0 %E2%80%8B')).toBe('%D0%41 %C2%A0 %E2%80%8B')
+  const result = `Successfully navigated to https://x.test/?q=${title}.\n## Latest page snapshot\nuid=1_0 RootWebArea "План" url="https://x.test/?q=${title}"\n  uid=1_1 link "Открыть" url="https://x.test/open?t=%D0%9F%D0%BB%D0%B0%D0%BD&d=2026-09-30T21%3A00%3A00.000Z"\n`
+  expect(unescapeSnapshot(result)).toBe(
+    `Successfully navigated to https://x.test/?q=${title}.\n## Latest page snapshot\nuid=1_0 RootWebArea "План" url="https://x.test/?q=Создать+план"\n  uid=1_1 link "Открыть" url="https://x.test/open?t=План&d=2026-09-30T21%3A00%3A00.000Z"\n`,
+  )
+  expect(squeezeText('mcp__chrome-devtools__click', result)).toBe(unescapeSnapshot(result))
+  // Another server's snapshot is no Chrome one.
+  expect(squeezeText('mcp__linear__get_issue', result)).toBe(result)
+})
+
+test('a Chrome state said again with the value it had is told so; a new value comes whole, and so does an old one after it', async ($, on) => {
+  const viewport = (width: number) => `Emulating viewport: {"deviceScaleFactor":3,"isMobile":true,"hasTouch":true,"isLandscape":false,"width":${width},"height":844}`
+  const answers: Record<string, string> = {
+    mcp__chrome_devtools__click: `Successfully clicked on the element\n${viewport(390)}`,
+    mcp__chrome_devtools__fill: `Successfully filled out the element\n${viewport(390)}`,
+    mcp__chrome_devtools__emulate: `Emulation configured successfully\n${viewport(1440)}`,
+    mcp__chrome_devtools__resize_page: `Resized\n${viewport(390)}`,
+  }
+  const { call } = await session($, on, Object.fromEntries(Object.entries(answers).map(([tool, text]) => [tool, [{ type: 'text', text }]])))
+  expect(textOf(await call('mcp__chrome_devtools__click'))).toBe(answers.mcp__chrome_devtools__click)
+  expect(textOf(await call('mcp__chrome_devtools__fill'))).toBe('Successfully filled out the element\nEmulating viewport: (as before)')
+  expect(textOf(await call('mcp__chrome_devtools__click'))).toBe('Successfully clicked on the element\nEmulating viewport: (as before)')
+  expect(textOf(await call('mcp__chrome_devtools__emulate'))).toBe(answers.mcp__chrome_devtools__emulate)
+  expect(textOf(await call('mcp__chrome_devtools__resize_page'))).toBe(answers.mcp__chrome_devtools__resize_page)
+  // A subagent has a context of its own.
+  expect(textOf(await call('mcp__chrome_devtools__fill', 'agent-1'))).toBe(answers.mcp__chrome_devtools__fill)
+  // A compact starts it over.
+  expect(textOf(await call('mcp__chrome_devtools__fill'))).toBe('Successfully filled out the element\nEmulating viewport: (as before)')
+  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'Summed up.', toolUses: [] }] })
+  expect(textOf(await call('mcp__chrome_devtools__fill'))).toBe(answers.mcp__chrome_devtools__fill)
 })

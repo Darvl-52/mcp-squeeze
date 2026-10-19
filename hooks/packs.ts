@@ -1,5 +1,6 @@
 // The packs: each one squeezes the tools of the MCP servers it knows, by what each tool returns. A
 // tool no pack takes has only what the mod does to every MCP tool (repeats left out).
+import { chrome } from './chrome.ts'
 import { figma } from './figma.ts'
 
 export type Pack = {
@@ -11,12 +12,16 @@ export type Pack = {
   server: RegExp
   // A line the pack starts a kind of block with, passed over where a repeat quotes how one starts.
   legend?: string
+  // The lines that say a state the server keeps and says again after each call, each pattern's
+  // first group the label and its second the value: where the value is the one the last such line
+  // said, the line says so in its place.
+  states?: readonly RegExp[]
   // One text block of the tool's result, squeezed; the caller keeps the original where it is no
   // shorter.
   squeezeText: (tool: string, text: string) => string
 }
 
-export const packs: readonly Pack[] = [figma]
+export const packs: readonly Pack[] = [figma, chrome]
 
 const isServer = (pack: Pack, server: string) => new RegExp(`^(?:${pack.server.source})$`, 'i').test(server)
 

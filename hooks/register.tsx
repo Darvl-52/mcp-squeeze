@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Seen, Stat, Total } from '../types'
 import { groupOf, MCP_TOOL, OTHER, packOf, switches } from './packs'
-import { hash, imageNote, imageTokens, pngSize, REPEAT_MIN, repeatNote, shortenTokens, squeezeText, tokenKey, tokensOf } from './squeeze'
+import { hash, imageNote, imageTokens, isRepeatIn, pngSize, squeezeBlock } from './squeeze'
 
 // Each agent's blocks, images and tokens returned this conversation, by hash: `whole` the last copy
 // went whole, so the next is left out; `pointed` it was left out, so the next goes whole. By agent,
@@ -48,38 +48,25 @@ const imageOf = (b: Block) => {
   return data === undefined ? undefined : { data, mimeType }
 }
 
-// The blocks squeezed, a block returned whole before left out, a token that came whole before told
-// by a note; with the images left out and the tokens they would have cost.
+// The blocks squeezed, each text as squeezeBlock tells it and an image returned whole before left
+// out; with the images left out and the tokens they would have cost.
 async function squeeze($: EngineInterface, tool: string, agent: string, blocks: readonly Block[]) {
   const seen = { ...((await read($, seenAtom))[agent] ?? {}) }
   let images = 0
   let imageCost = 0
-  // Whether this copy goes whole: not when the last copy did.
-  const isRepeat = (key: string) => {
-    const was = seen[key] === 'whole'
-    seen[key] = was ? 'pointed' : 'whole'
-    return was
-  }
   const out = blocks.map((b): Block => {
     if (b.type === 'image') {
       // Only an image whose size it reads (a PNG, as Figma sends) is left out, so what it saves
       // is counted; any other passes as it came.
       const image = imageOf(b)
       const size = image && pngSize(image.data)
-      if (!image || !size || !isRepeat(`image:${hash(image.data)}`)) return b
+      if (!image || !size || !isRepeatIn(seen, `image:${hash(image.data)}`)) return b
       images++
       imageCost += imageTokens(size)
       return { type: 'text', text: imageNote(image.mimeType, size) }
     }
     if (b.type !== 'text' || typeof b.text !== 'string') return b
-    const squeezed = squeezeText(tool, b.text)
-    const key = hash(squeezed)
-    // The copy after one left out is the one the model called for again, its earlier copy out of
-    // view: its tokens come whole too.
-    const isAgain = squeezed.length >= REPEAT_MIN && seen[key] === 'pointed'
-    if (squeezed.length >= REPEAT_MIN && isRepeat(key)) return { ...b, text: repeatNote(squeezed) }
-    if (isAgain) for (const t of tokensOf(squeezed)) seen[tokenKey(t)] = 'whole'
-    const text = isAgain ? squeezed : shortenTokens(squeezed, isRepeat)
+    const { text } = squeezeBlock(tool, b.text, seen)
     return text === b.text ? b : { ...b, text }
   })
   await update($, seenAtom, all => ({ ...all, [agent]: seen }))

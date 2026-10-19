@@ -3,7 +3,8 @@
 A Claude Code mod that squeezes what the MCP tools return before the model reads it. Each result
 an MCP tool sends lands in the context and stays there for the rest of the conversation; the mod
 keeps what the model acts on and drops what only repeats it or spells it long: a repeat from any
-server, and for the servers it has a pack for (Figma, for now), what their results spell long.
+server, and for the servers it has a pack for (Figma, Chrome DevTools), what their results spell
+long.
 
 Over 1,600 Figma calls of past sessions it kept out about 23% of their text and 39 repeated
 images: about 235k tokens. `get_metadata` comes out at half its size, a large
@@ -26,9 +27,10 @@ For every MCP tool:
   starts and how it ends: a bearer token in every request of a page comes once. The token after a
   note comes whole again, and so does each token of a block called for again after one left out.
 
-And a pack for each kind of MCP server it knows, a file in `hooks/` listed in `hooks/packs.ts`;
-for now there is one, `figma`, which takes the Figma servers' tools, whatever a config names the
-server (`figma`, `claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin_figma_figma`):
+And a pack for each kind of MCP server it knows, a file in `hooks/` listed in `hooks/packs.ts`.
+
+`figma` takes the Figma servers' tools, whatever a config names the server (`figma`,
+`claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin_figma_figma`):
 
 - **`get_metadata` as an outline.** One node a line, closing tags dropped since the indent says
   where a node ends, a name that is only the node's type (`Frame`, `Group`) left out:
@@ -58,6 +60,18 @@ server (`figma`, `claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin
   the component, `className={cn1}` where it was; the code means the same, the value kept exactly.
 - **Float noise rounded.** A float32 value written out whole, `1.1299999952316284`, becomes the
   shortest writing of the same float32, `1.13`; any other number is left as it is.
+
+`chrome` takes the Chrome DevTools server's tools (`chrome-devtools`, `chrome_devtools`,
+`chrome-devtools-mcp`):
+
+- **A state said once.** `Emulating viewport: {…}`, which the server says after each call while it
+  emulates, becomes `Emulating viewport: (as before)` where its value is the one it said last; a
+  new value comes whole, and so does the one before it said again. The line stays, so the model
+  can tell the emulation lasting from one turned off, after which the server says nothing.
+- **A snapshot's URLs in letters.** In the page's snapshot, a letter past ASCII percent-escaped in a
+  `url="…"` is written as itself: `title=%D0%9F%D0%BB%D0%B0%D0%BD` becomes `title=План`, the same
+  URL to a browser. An escaped ASCII character (`%20`, `%2F`, `%26`) stays, as do a character that
+  does not show and every URL outside the snapshot (a request's, a script's result).
 
 ## Commands
 

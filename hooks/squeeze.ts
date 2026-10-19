@@ -1,5 +1,6 @@
 // What the mod does to the text an MCP tool returns, whichever pack squeezes it, and the notes it
 // leaves where a repeat was left out. What each pack does to its own tools is in its file.
+import type { Seen } from '../types'
 import { packOf, packs } from './packs.ts'
 
 export { collapseInstances, hoistClasses, isCode, outline, OUTLINE_LEGEND, roundNoise } from './figma.ts'
@@ -46,6 +47,52 @@ export const shortenTokens = (text: string, isRepeat: (key: string) => boolean) 
 
 // A block this long or longer is left out where it was returned whole before.
 export const REPEAT_MIN = 300
+
+// Whether this copy is left out, by what `seen` holds: so when the last copy went whole, and the next
+// goes whole again; kept in `seen` for the next.
+export const isRepeatIn = (seen: Seen, key: string) => {
+  const was = seen[key] === 'whole'
+  seen[key] = was ? 'pointed' : 'whole'
+  return was
+}
+
+// What a state line says in place of a value the last such line said.
+export const STATE_SAME = '(as before)'
+
+// A text with each state line whose value is the one the last line of its label said told so, a
+// line with another value kept as the state now; with `isAgain`, each line kept, as the state now.
+const tellStates = (text: string, states: readonly RegExp[], pack: string, seen: Seen, isAgain: boolean) =>
+  text
+    .split('\n')
+    .map(line => {
+      const m = states.map(re => re.exec(line)).find(Boolean)
+      if (!m) return line
+      const [, label = '', value = ''] = m
+      const prefix = `state:${pack}:${hash(label)}:`
+      if (!isAgain && seen[prefix + hash(value)] === 'whole' && STATE_SAME.length < value.length) return `${label}${STATE_SAME}`
+      for (const key of Object.keys(seen)) if (key.startsWith(prefix)) delete seen[key]
+      seen[prefix + hash(value)] = 'whole'
+      return line
+    })
+    .join('\n')
+
+// One text block as the model is to read it, by what this agent's conversation holds (`seen`, kept
+// up for the next): squeezed by its pack, left out where the same came whole before, or else each
+// state line that says what the last did told so and each token that came whole before told by a
+// note. The copy after one left out is the one the model called for again, its earlier copy out of
+// view: it comes whole, states and tokens and all. With the text its pack alone made of it.
+export const squeezeBlock = (tool: string, text: string, seen: Seen) => {
+  const packed = squeezeText(tool, text)
+  const key = hash(packed)
+  const isLong = packed.length >= REPEAT_MIN
+  const isAgain = isLong && seen[key] === 'pointed'
+  if (isLong && isRepeatIn(seen, key)) return { packed, text: repeatNote(packed) }
+  const pack = packOf(tool)
+  const stated = pack?.states ? tellStates(packed, pack.states, pack.id, seen, isAgain) : packed
+  if (!isAgain) return { packed, text: shortenTokens(stated, k => isRepeatIn(seen, k)) }
+  for (const t of tokensOf(stated)) seen[tokenKey(t)] = 'whole'
+  return { packed, text: stated }
+}
 
 const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
