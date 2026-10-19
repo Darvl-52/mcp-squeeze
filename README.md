@@ -63,9 +63,17 @@ result in a shape it does not know pass as they came. A result sent with Windows
 The tokens are an estimate: text at 3.5 characters a token, an image at a token per 750 pixels.
 No API counts the tokens of a text without a model call that would cost about what it saves.
 
-`node tools/measure.mjs` works out what the mod would have kept out of the Figma results in this
+`node tools/measure.mjs` works out what the mod would have kept out of the MCP results in this
 machine's past sessions, from the transcripts under `projects` in the Claude config folder
-(`CLAUDE_CONFIG_DIR`, else `~/.claude`); it writes nothing.
+(`CLAUDE_CONFIG_DIR`, else `~/.claude`); it writes nothing. It goes by server and tool, and for a
+server no pack takes it says what leaving out its repeats would keep out, to weigh a pack for it.
+A result the mod had squeezed already when it came is left out of the count.
+
+```sh
+node tools/measure.mjs                          # every MCP server
+node tools/measure.mjs --server chrome          # the servers whose name holds "chrome"
+node tools/measure.mjs --sample take_snapshot 3 # the first 3 results of a tool, as they came and squeezed
+```
 
 ## Install
 
