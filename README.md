@@ -11,8 +11,10 @@ images: about 235k tokens. `get_metadata` comes out at half its size, a large
 
 ## What it does
 
-It works on the Figma servers' tools, `figma` and `claude_ai_Figma` alike; every other tool, an
-error, and a result in a shape it does not know pass as they came.
+It works on the Figma servers' tools, whatever a config names the server (`figma`,
+`claude_ai_Figma`, `figma-dev-mode`, the Figma plugin's `plugin_figma_figma`); every other tool, an
+error, and a result in a shape it does not know pass as they came. A result sent with Windows line
+breaks (`\r\n`) is squeezed as any other.
 
 - **`get_metadata` as an outline.** One node a line, closing tags dropped since the indent says
   where a node ends, a name that is only the node's type (`Frame`, `Group`) left out:
@@ -44,7 +46,9 @@ error, and a result in a shape it does not know pass as they came.
   shortest writing of the same float32, `1.13`; any other number is left as it is.
 - **A repeat left out.** A block, or a PNG image, a tool returns again in the same conversation
   becomes a short note saying so; the copy after it comes whole again, so the model can always
-  get it back. A compact, a `/clear` and each subagent start over.
+  get it back. A compact, a `/clear` and each subagent start over. Where an organization manages
+  Claude Code, a compact does not reach a mod a person installed: there the note after a compact
+  may name a copy the summary took the place of, and calling the tool again brings it whole.
 
 ## Commands
 
@@ -58,7 +62,8 @@ The tokens are an estimate: text at 3.5 characters a token, an image at a token 
 No API counts the tokens of a text without a model call that would cost about what it saves.
 
 `node tools/measure.mjs` works out what the mod would have kept out of the Figma results in this
-machine's past sessions, from the transcripts under `~/.claude/projects`; it writes nothing.
+machine's past sessions, from the transcripts under `projects` in the Claude config folder
+(`CLAUDE_CONFIG_DIR`, else `~/.claude`); it writes nothing.
 
 ## Install
 

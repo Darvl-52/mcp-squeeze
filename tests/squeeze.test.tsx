@@ -85,8 +85,10 @@ const session = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], 
     return { value: undefined }
   })
   on('command.register', () => ({ value: { command: 'squeeze' } }))
-  on('classic.SessionStart', () => ({}))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  // A compact told to keep nothing is one the engine skips.
+  on('session.compact', ($, e) => (e.instructions === 'skip' ? { skip: 'nothing to compact' } : { messages: e.messages }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('tool.call', ($, e) => {
     // A name no connected server has, so compared as a string.
     if (String(e.tool) === 'mcp__figma__broken') return { result: 'Server error', isError: true as const, text: 'Server error' }
@@ -99,10 +101,19 @@ const session = async ($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], 
     return (r as { result?: unknown }).result
   }
   const run = async (command: string, args = '') => (await $.command.run({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })).text
-  return { call, squeeze: (args = '') => run('squeeze', args), gain: () => run('squeeze-gain'), store }
+  // A compact of the main conversation, or of an agent's own, as the engine raises it.
+  const compact = (trigger: 'manual' | 'auto' | 'precompute' = 'manual', options: { agentId?: string; instructions?: string } = {}) =>
+    $.session.compact({ trigger, messages: [{ role: 'user', text: 'The conversation so far, summed up.', toolUses: [] }], ...options })
+  const clear = () => $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } })
+  return { call, squeeze: (args = '') => run('squeeze', args), gain: () => run('squeeze-gain'), compact, clear, store }
 }
 
 const textOf = (result: unknown) => (result as { type: string; text?: string }[]).map(b => b.text ?? `<${b.type}>`).join('|')
+
+// Other names a Figma server goes by in people's configs: the Dev Mode server's, the Figma
+// plugin's, one named by hand; each one's metadata of a page of its own, so none is a repeat.
+const SERVERS = ['figma-dev-mode', 'plugin_figma_figma', 'Figma_Desktop']
+const metaOf = (server: string) => META.replace('name="Page"', `name="${server}"`)
 
 test('a Figma result is squeezed for the model; images and other tools pass as they came', async ($, on) => {
   const IMAGE = { type: 'image', data: 'AAAA', mimeType: 'image/png' }
@@ -110,8 +121,14 @@ test('a Figma result is squeezed for the model; images and other tools pass as t
     mcp__figma__get_metadata: [{ type: 'text', text: META }],
     mcp__claude_ai_Figma__get_design_context: [{ type: 'text', text: CODE }, IMAGE],
     mcp__linear__list_issues: [{ type: 'text', text: 'width: 1.1299999952316284' }],
+    ...Object.fromEntries(SERVERS.map(server => [`mcp__${server}__get_metadata`, [{ type: 'text', text: metaOf(server) }]])),
+    mcp__linear__figma_get_metadata: [{ type: 'text', text: META }],
   })
   expect(textOf(await call('mcp__figma__get_metadata'))).toBe(outline(META))
+  // Whatever this person's config names the Figma server; another server's tool named for Figma is
+  // not one of its.
+  for (const server of SERVERS) expect(textOf(await call(`mcp__${server}__get_metadata`))).toBe(outline(metaOf(server)))
+  expect(textOf(await call('mcp__linear__figma_get_metadata'))).toBe(META)
   const context = (await call('mcp__claude_ai_Figma__get_design_context')) as unknown[]
   expect(textOf(context)).toContain('className={cn1}')
   expect(context[1]).toEqual(IMAGE)
@@ -120,31 +137,42 @@ test('a Figma result is squeezed for the model; images and other tools pass as t
 })
 
 test('a block returned again is left out once, then comes whole; a compact or another agent starts over', async ($, on) => {
-  const { call } = await session($, on, { mcp__figma__use_figma: [{ type: 'text', text: LONG }] })
+  const { call, compact } = await session($, on, { mcp__figma__use_figma: [{ type: 'text', text: LONG }] })
+  const REPEAT = /^\[The same \d+ characters this tool returned earlier in this conversation, starting "Lorem ipsum/
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
-  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(/^\[The same \d+ characters this tool returned earlier in this conversation, starting "Lorem ipsum/)
+  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(REPEAT)
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
   // A subagent has a context of its own.
   expect(textOf(await call('mcp__figma__use_figma', 'agent-1'))).toBe(LONG)
-  await $.classic.SessionStart({ source: 'compact' } as never)
+  // A summary worked out ahead of time, or a compact skipped, leaves the context as it was.
+  await compact('precompute')
+  await compact('manual', { instructions: 'skip' })
+  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(REPEAT)
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
+  // A compact starts over the context it compacted, the main one's here, not the subagent's.
+  await compact('auto')
+  expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
+  expect(textOf(await call('mcp__figma__use_figma', 'agent-1'))).toMatch(REPEAT)
+  await compact('auto', { agentId: 'agent-1' })
+  expect(textOf(await call('mcp__figma__use_figma', 'agent-1'))).toBe(LONG)
+  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(REPEAT)
 })
 
 test('a /clear starts a new conversation: what was returned and what was kept out start over', async ($, on) => {
-  const { call, squeeze } = await session($, on, { mcp__figma__use_figma: [{ type: 'text', text: LONG }] })
+  const { call, squeeze, compact, clear } = await session($, on, { mcp__figma__use_figma: [{ type: 'text', text: LONG }] })
   await call('mcp__figma__use_figma')
   expect(await squeeze()).toMatch(/This conversation: 1 Figma call/)
-  await $.classic.SessionStart({ source: 'clear' } as never)
+  await clear()
   expect(await squeeze()).toMatch(/^MCP squeeze is on\. No Figma tool has answered/)
   expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
-  // A resumed conversation keeps both.
-  await $.classic.SessionStart({ source: 'resume' } as never)
-  expect(textOf(await call('mcp__figma__use_figma'))).toMatch(/^\[The same/)
+  // A compact starts over what was returned, not what was kept out.
+  await compact()
+  expect(textOf(await call('mcp__figma__use_figma'))).toBe(LONG)
   expect(await squeeze()).toMatch(/This conversation: 2 Figma calls/)
 })
 
 test('/squeeze-gain says the tokens saved: this conversation, all time past a /clear, by tool', async ($, on) => {
-  const { call, gain } = await session($, on, {
+  const { call, gain, clear } = await session($, on, {
     mcp__figma__get_metadata: [{ type: 'text', text: META }],
     mcp__figma__use_figma: [{ type: 'text', text: LONG }],
   })
@@ -162,7 +190,7 @@ test('/squeeze-gain says the tokens saved: this conversation, all time past a /c
   // By tool, the one that saved the most first.
   expect(lines.slice(5)).toEqual(['By tool, all time:', expect.stringMatching(/^  get_metadata\s+1 call /), expect.stringMatching(/^  use_figma\s+2 calls/)])
   // A /clear starts the conversation over; all time keeps counting.
-  await $.classic.SessionStart({ source: 'clear' } as never)
+  await clear()
   await call('mcp__figma__get_metadata')
   const after = (await gain())!.split('\n')
   expect(after[2]).toMatch(/^this conversation\s+1 call /)
@@ -188,7 +216,20 @@ test('an image returned again is left out once, its size named and its tokens co
   expect(await call('mcp__figma__get_photo')).toEqual([PHOTO])
   expect(await call('mcp__figma__get_photo')).toEqual([PHOTO])
   expect((await gain())!.split('\n')[2]).toMatch(/^this conversation\s+5 calls  saved ≈\s+\d+ tokens .*  images left out: 1 \(≈ 769\)$/)
-  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 5 Figma calls, \d+ → \d+ characters \(−?\d+%\), 1 repeated image left out; about \d+ tokens kept out of the context\./)
+  // No text came, so none was squeezed: the note in the image's place counts as no change.
+  expect(await squeeze()).toMatch(/^MCP squeeze is on\. This conversation: 5 Figma calls, 0 → \d+ characters \(−0%\), 1 repeated image left out; about \d+ tokens kept out of the context\./)
+})
+
+test('text grown by an image\'s note is said to have grown, the sign once', async ($, on) => {
+  const SHOT = { type: 'image', data: PNG, mimeType: 'image/png' }
+  const { call, gain, squeeze } = await session($, on, { mcp__figma__get_screenshot: [{ type: 'text', text: 'Node 1:2' }, SHOT] })
+  await call('mcp__figma__get_screenshot')
+  await call('mcp__figma__get_screenshot')
+  const report = (await squeeze())!
+  expect(report).toMatch(/This conversation: 2 Figma calls, 16 → \d+ characters \(\+\d+%\), 1 repeated image left out/)
+  expect(report).toMatch(/\n  get_screenshot\s+2 ×\s+16 →\s+\d+  \+\d+%\n/)
+  expect((await gain())!.split('\n')[2]).toMatch(/text\s+5 →\s+\d+ \(\+\d+%\)  images left out: 1/)
+  expect(`${report}${await gain()}`).not.toMatch(/−-|\+-/)
 })
 
 const CARD = 'bg-white border border-[#e0e3ed] content-stretch flex flex-col gap-[16px] p-[28px] rounded-[20px] w-[320px]'
@@ -268,6 +309,62 @@ test('a component whose element has no node id is no template, and a text holdin
   const note = closing.split('\n').find(l => l.includes('inside as <PlanCard>'))!
   expect(note.match(/\*\//g)).toHaveLength(1)
   expect(JSON.parse(/1:3 (".*?") \*\/\}$/.exec(note)![1]!)).toBe('a */ b')
+})
+
+const BODY = 'content-stretch flex flex-col gap-[4px] items-start px-[12px] py-[6px] rounded-[8px]'
+const LABEL = "font-['Inter:Medium'] leading-[1.4] text-[#5b6170] text-[12px] whitespace-nowrap"
+const BADGES = `function Badge() {
+  return (
+    <div className="${DOT}" data-node-id="2:1" data-name="Badge">
+      <div className="${BODY}" data-node-id="2:2" data-name="Body">
+        <p className="${LABEL}" data-node-id="2:3">Plan</p>
+        <span>
+          Free
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <div className="${DOT}" data-node-id="2:20" data-name="Badge">
+      <div className="${BODY}" data-node-id="I2:20;2:2" data-name="Body">
+        <p className="${LABEL}" data-node-id="I2:20;2:3">Plan</p>
+        <span>
+          Paid
+        </span>
+      </div>
+    </div>
+  );
+}`
+
+test('a tag whose element closes on its own line opens none: a text after it is told by the node it is in', () => {
+  const out = collapseInstances(BADGES).split('\n')
+  const badge = out.indexOf(`    <div className="${DOT}" data-node-id="2:20" data-name="Badge">`)
+  // "Paid" is in Body (2:2), not in the label closed on its line before it (2:3).
+  expect(out.slice(badge + 1, badge + 3)).toEqual(['      {/* inside as <Badge> (2:1), node ids "I2:20;" + its own ids; differs at its own ids: 2:2 "Paid" */}', '    </div>'])
+})
+
+test('a result with Windows line breaks (\\r\\n) is squeezed as with \\n; one with nothing to squeeze comes as it came', async ($, on) => {
+  const crlf = (text: string) => text.replaceAll('\n', '\r\n')
+  expect(outline(crlf(META))).toBe(outline(META))
+  expect(collapseInstances(crlf(INSTANCES))).toBe(collapseInstances(INSTANCES))
+  expect(collapseInstances(crlf(BADGES))).toBe(collapseInstances(BADGES))
+  for (const [tool, text] of [
+    ['mcp__figma__get_metadata', META],
+    ['mcp__figma__get_design_context', INSTANCES],
+    ['mcp__figma__get_design_context', CODE],
+  ] as const) {
+    expect(squeezeText(tool, crlf(text))).toBe(squeezeText(tool, text))
+    expect(squeezeText(tool, crlf(text))).not.toContain('\r')
+  }
+  const plain = crlf('No node found.\nTry another node id.')
+  expect(squeezeText('mcp__figma__get_design_context', plain)).toBe(plain)
+  expect(squeezeText('mcp__figma__get_metadata', plain)).toBe(plain)
+  // Through the hook, as a server on Windows sends it.
+  const { call } = await session($, on, { mcp__figma__get_metadata: [{ type: 'text', text: crlf(META) }] })
+  expect(textOf(await call('mcp__figma__get_metadata'))).toBe(outline(META))
 })
 
 test('/squeeze says what it kept out, and turns it off and on', async ($, on) => {

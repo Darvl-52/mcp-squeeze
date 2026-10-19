@@ -36,11 +36,12 @@ const CLOSING = /^\s*(?:<\/[\w-]+>)+/
 export const OUTLINE_LEGEND = '[Figma metadata as an outline: type id "name" x,y width×height, each child one space in from its parent; a node whose name is its type (Frame, Group…) goes without it]'
 
 // `get_metadata`'s XML as an outline, one node a line, the closing tags dropped since the indent
-// says where a node ends; a line that is no tag (the note after it) is kept as it is.
+// says where a node ends; a line that is no tag (the note after it) is kept as it is. A line may end
+// `\r\n`, as a server on Windows may send it.
 export const outline = (text: string) => {
   const out: string[] = []
   let isTree = false
-  for (const raw of text.split('\n')) {
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(CLOSING, '')
     if (line !== raw) isTree = true
     if (line.trim() === '') {
@@ -106,7 +107,10 @@ const BARE_ID = /^\d+:\d+$/
 
 const indentOf = (line: string) => line.length - line.trimStart().length
 const isTag = (line: string) => line.trimStart().startsWith('<')
-const isOpening = (line: string) => isTag(line) && !line.trimStart().startsWith('</') && !line.trimEnd().endsWith('/>') && line.trimEnd().endsWith('>')
+// A tag whose element goes on over the lines after it: not one that closes an element, closes
+// itself, or whose element closes on its own line (`<p data-node-id="1:3">Pro</p>`).
+const CLOSED_ON_LINE = /<\/[\w.-]*>\s*$/
+const isOpening = (line: string) => isTag(line) && !line.trimStart().startsWith('</') && !line.trimEnd().endsWith('/>') && line.trimEnd().endsWith('>') && !CLOSED_ON_LINE.test(line)
 
 // The line that closes the element `lines[at]` opens: the next closing tag at its indent, as the
 // code Figma writes puts each tag on a line of its own; -1 where there is none.
@@ -148,7 +152,7 @@ type Template = { name: string; label: string; prefix: string; shape: string; sl
 // place of that inside: what it is the same as, how its node ids read, and the texts and images that
 // differ, by node. Nothing it says is lost; an inside that differs in anything else stays whole.
 export const collapseInstances = (code: string) => {
-  const lines = code.split('\n')
+  const lines = code.split(/\r?\n/)
   const templates: Template[] = []
   // The components Figma wrote as functions: the element each returns, its node ids as they are.
   // Only the first tag in the function's own body counts, and only with a node id of its own.
@@ -202,11 +206,14 @@ export const collapseInstances = (code: string) => {
 }
 
 // One text block of a Figma tool's result, squeezed by what the tool is; never longer than it was.
+// Its line breaks read as `\n`, however it came (`\r\n` from a server on Windows); a block with
+// nothing else to squeeze comes as it came, line breaks and all.
 export const squeezeText = (tool: string, text: string) => {
-  let out = roundNoise(text)
+  const lf = text.replaceAll('\r\n', '\n')
+  let out = roundNoise(lf)
   if (tool.endsWith('__get_metadata')) out = outline(out)
   else if (tool.endsWith('__get_design_context') && isCode(out)) out = hoistClasses(collapseInstances(out).replace(GENERIC_NAME, ''))
-  return out.length < text.length ? out : text
+  return out.length < lf.length ? out : text
 }
 
 // A block this long or longer is left out where it was returned whole before.
