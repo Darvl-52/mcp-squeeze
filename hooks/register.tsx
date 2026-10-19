@@ -9,8 +9,10 @@ import { hash, imageNote, imageTokens, pngSize, REPEAT_MIN, repeatNote, squeezeT
 const seenAtom = atom({ plugin: 'mcp-squeeze', key: 'seen' } as const, {} as Record<string, Seen>)
 const statsAtom = atom({ plugin: 'mcp-squeeze', key: 'stats' } as const, {} as Record<string, Stat>)
 
-// The Figma servers' tools, whichever name the server goes by (`figma`, `claude_ai_Figma`).
-const isFigma = (tool: string) => tool.startsWith('mcp__') && /figma/i.test(tool.slice(5, tool.lastIndexOf('__')))
+// The Figma servers' tools, whichever name the server goes by in a person's config (`figma`,
+// `claude_ai_Figma`, `figma-dev-mode`, a plugin's `plugin_figma_figma`): `figma` in the server's
+// part of the name, before the last `__`, so another server's `figma_export` is no Figma tool.
+const FIGMA_TOOL = /^mcp__.*figma.*__(?:(?!__).)+$/i
 const OFF_KEY = 'off'
 // What it has kept out since it was first on, across sessions (Total).
 const TOTAL_KEY = 'total'
@@ -80,6 +82,9 @@ async function squeeze($: EngineInterface, tool: string, agent: string, blocks: 
 
 const kilo = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`)
 const percent = (s: Stat) => (s.before === 0 ? 0 : Math.round(100 - (100 * s.after) / s.before))
+// The text's change, signed: `−23%` smaller, `+40%` larger (a repeated image's note is text where
+// the image was none).
+const change = (s: Stat) => (percent(s) < 0 ? `+${-percent(s)}%` : `−${percent(s)}%`)
 const tokens = (chars: number) => Math.round(chars / CHARS_PER_TOKEN)
 
 // What one call adds to a tool's stat; an earlier version's stat counts no images.
@@ -128,7 +133,7 @@ function addToTotal($: EngineInterface, tool: string, call: Omit<Stat, 'calls'>)
 // One line of what was kept out: the calls, the tokens saved, the text before and after, the
 // images left out.
 const gainLine = (label: string, s: Stat, width: number) =>
-  `${label.padEnd(width)}  ${String(s.calls).padStart(4)} ${s.calls === 1 ? 'call ' : 'calls'}  saved ≈ ${kilo(saved(s)).padStart(6)} tokens  text ${kilo(tokens(s.before)).padStart(6)} → ${kilo(tokens(s.after)).padStart(6)} (−${percent(s)}%)${s.images ? `  images left out: ${s.images} (≈ ${kilo(s.imageTokens ?? 0)})` : ''}`
+  `${label.padEnd(width)}  ${String(s.calls).padStart(4)} ${s.calls === 1 ? 'call ' : 'calls'}  saved ≈ ${kilo(saved(s)).padStart(6)} tokens  text ${kilo(tokens(s.before)).padStart(6)} → ${kilo(tokens(s.after)).padStart(6)} (${change(s)})${s.images ? `  images left out: ${s.images} (≈ ${kilo(s.imageTokens ?? 0)})` : ''}`
 
 function gain(conversation: Readonly<Record<string, Stat>>, total: Total | undefined) {
   const since = total ? new Date(total.since).toISOString().slice(0, 10) : ''
@@ -152,8 +157,8 @@ function report(stats: Readonly<Record<string, Stat>>, isOn: boolean) {
   const width = Math.max(...rows.map(([t]) => t.length))
   const images = all.images ? `, ${all.images} repeated ${all.images === 1 ? 'image' : 'images'} left out` : ''
   return [
-    `${head} This conversation: ${all.calls} Figma ${all.calls === 1 ? 'call' : 'calls'}, ${kilo(all.before)} → ${kilo(all.after)} characters (−${percent(all)}%)${images}; about ${kilo(saved(all))} tokens kept out of the context.`,
-    ...rows.map(([t, r]) => `  ${t.padEnd(width)}  ${String(r.calls).padStart(3)} × ${kilo(r.before).padStart(6)} → ${kilo(r.after).padStart(6)}  −${percent(r)}%`),
+    `${head} This conversation: ${all.calls} Figma ${all.calls === 1 ? 'call' : 'calls'}, ${kilo(all.before)} → ${kilo(all.after)} characters (${change(all)})${images}; about ${kilo(saved(all))} tokens kept out of the context.`,
+    ...rows.map(([t, r]) => `  ${t.padEnd(width)}  ${String(r.calls).padStart(3)} × ${kilo(r.before).padStart(6)} → ${kilo(r.after).padStart(6)}  ${change(r)}`),
     FOOT,
   ].join('\n')
 }
@@ -169,20 +174,28 @@ export const register: Register = on => {
 
   on('command.run', { command: 'squeeze-gain' }, async $ => ({ text: gain(await read($, statsAtom), await totalIn($)) }))
 
-  // A compact or a /clear starts the context over: a block left out now would point at nothing.
-  on('classic.SessionStart', async ($, e, next) => {
+  // A compact starts the compacting agent's context over: a block left out now would point at what
+  // the summary took the place of. Once the compact stood, not for one skipped, nor for a summary
+  // worked out ahead of time (`precompute`), which leaves the context as it was.
+  on('session.compact', async ($, e, next) => {
     const ran = await next(e)
-    if (e.source === 'compact' || e.source === 'clear') {
+    if (e.trigger !== 'precompute' && ran.skip === undefined) await update($, seenAtom, all => ({ ...all, [e.agentId ?? '']: {} }))
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // A /clear starts a new conversation: what was returned and what was kept out start over.
+  on('session.end', async ($, e, next) => {
+    const ran = await next(e)
+    if (e.reason === 'clear') {
       await update($, seenAtom, () => ({}))
-      if (e.source === 'clear') await update($, statsAtom, () => ({}))
+      await update($, statsAtom, () => ({}))
     }
     return ran
   }).catch(($, e, next) => next(e))
 
-  // A Figma tool's result is squeezed after it ran; any other tool, an error, or a shape it does
-  // not know passes as it came.
-  on('tool.call', async ($, e, next) => {
-    if (!isFigma(e.tool)) return next(e)
+  // A Figma tool's result is squeezed after it ran; an error, or a shape it does not know, passes
+  // as it came, as does any other tool, which the hook never sees.
+  on('tool.call', { tool: FIGMA_TOOL }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError || !(await isOnIn($))) return ran
     const found = blocksOf(ran.result)

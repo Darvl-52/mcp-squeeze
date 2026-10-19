@@ -1,6 +1,7 @@
 // What the mod would have kept out of the Figma tools' results in this machine's past sessions:
-// reads every transcript under ~/.claude/projects, squeezes each result as the mod does, a repeat
-// left out within its own conversation, and prints it by tool.
+// reads every transcript under the Claude config folder's `projects` (`CLAUDE_CONFIG_DIR`, else
+// `.claude` in the home folder, `HOME` or `USERPROFILE`), squeezes each result as the mod does, a
+// repeat left out within its own conversation, and prints it by tool.
 //
 //   node tools/measure.mjs
 //
@@ -19,7 +20,8 @@ const walk = dir => {
     else if (name.endsWith('.jsonl')) files.push(path)
   }
 }
-walk(join(homedir(), '.claude/projects'))
+const config = process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME || process.env.USERPROFILE || homedir(), '.claude')
+walk(join(config, 'projects'))
 
 const stats = {}
 const add = (tool, key, n) => {
@@ -34,7 +36,7 @@ for (const file of files) {
     seen.set(key, was ? 'pointed' : 'whole')
     return was
   }
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
     if (!line.includes('figma') && !line.includes('tool_result')) continue
     let record
     try {
@@ -45,7 +47,7 @@ for (const file of files) {
     const content = record.message?.content
     if (!Array.isArray(content)) continue
     for (const b of content) {
-      if (b?.type === 'tool_use' && /^mcp__.*figma.*__/i.test(b.name ?? '')) names.set(b.id, b.name)
+      if (b?.type === 'tool_use' && /^mcp__.*figma.*__(?:(?!__).)+$/i.test(b.name ?? '')) names.set(b.id, b.name)
       if (b?.type !== 'tool_result' || !names.has(b.tool_use_id) || !Array.isArray(b.content)) continue
       const tool = names.get(b.tool_use_id)
       const short = tool.slice(tool.lastIndexOf('__') + 2)
