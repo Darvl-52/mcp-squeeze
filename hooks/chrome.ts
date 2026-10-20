@@ -81,16 +81,16 @@ export const snapshotChanges = (last: readonly string[], now: readonly string[])
   const kept = rising(positions)
   const entries: Entry[] = []
   let i = 0
+  // The last snapshot's lines from `i` up to `to`, the next one still on the page, as gone: each
+  // told, but for a line in one told before it, which it counts. A line in it that is still on the
+  // page is past `to`, and no line past `to` is counted, so each line is told once.
   const gone = (to: number) => {
-    // A run of lines gone: each told, but for a line in one told before it.
-    let under = Infinity
-    for (; i < to; i++) {
+    while (i < to) {
       const line = last[i]!
-      if (indentOf(line) > under) continue
-      under = indentOf(line)
-      const inside = last.slice(i + 1).findIndex(l => indentOf(l) <= under)
-      const count = inside < 0 ? last.length - i - 1 : inside
+      let count = 0
+      while (i + 1 + count < to && indentOf(last[i + 1 + count]!) > indentOf(line)) count++
       entries.push({ mark: '-', line: count ? `${line} (and the ${count} ${count === 1 ? 'line' : 'lines'} in it)` : line, keep: true })
+      i += 1 + count
     }
   }
   now.forEach((line, k) => {
@@ -103,13 +103,18 @@ export const snapshotChanges = (last: readonly string[], now: readonly string[])
     entries.push(line === last[positions[k]!] ? { mark: ' ', line, keep: false } : { mark: '~', line, keep: true })
   })
   gone(last.length)
-  // Each change keeps the lines it is in, the nearest above it of each lesser indent.
+  // Each change keeps the lines it is in, the nearest above it of each lesser indent. A line gone is
+  // in no line of the snapshot now, so it closes none.
   const open: Entry[] = []
   for (const entry of entries) {
     const indent = indentOf(entry.line)
+    if (entry.mark === '-') {
+      for (const parent of open) if (indentOf(parent.line) < indent) parent.keep = true
+      continue
+    }
     while (open.length && indentOf(open.at(-1)!.line) >= indent) open.pop()
     if (entry.mark !== ' ') for (const parent of open) parent.keep = true
-    if (entry.mark !== '-') open.push(entry)
+    open.push(entry)
   }
   if (entries.every(e => e.mark === ' ')) return []
   const out: string[] = []

@@ -576,3 +576,97 @@ test('a Chrome snapshot is told by its changes since the last; a take_snapshot c
   await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'Summed up.', toolUses: [] }] })
   expect(textOf(await call('mcp__chrome_devtools__navigate_page'))).toBe(answers.mcp__chrome_devtools__navigate_page)
 })
+
+// A page as nodes, each with its uid, its line's text and the nodes in it; a seeded draw, so a case
+// that fails reads the same again.
+type PageNode = { uid: string; text: string; kids: PageNode[] }
+
+const drawPages = (seed: number) => {
+  let state = seed
+  const draw = (n: number) => {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0
+    return Math.floor((state / 2 ** 32) * n)
+  }
+  let next = 0
+  const TEXTS = ['button "Go"', 'link "A" url="https://x.test/a"', 'heading "H" level="2"', '"Some text"', 'list']
+  const tree = (depth: number): PageNode => {
+    const n: PageNode = { uid: `${1 + draw(3)}_${next++}`, text: TEXTS[draw(TEXTS.length)]!, kids: [] }
+    if (depth > 0) for (let k = draw(5); k > 0; k--) n.kids.push(tree(depth - 1))
+    return n
+  }
+  const all = (n: PageNode): PageNode[] => [n, ...n.kids.flatMap(all)]
+  const clone = (n: PageNode): PageNode => ({ ...n, kids: n.kids.map(clone) })
+  const lines = (n: PageNode, depth = 0): string[] => [`${'  '.repeat(depth)}uid=${n.uid} ${n.text}`, ...n.kids.flatMap(k => lines(k, depth + 1))]
+  const last = tree(3)
+  const now = clone(last)
+  // A node changed, a subtree gone, a subtree new, a subtree moved.
+  for (let e = 1 + draw(4); e > 0; e--) {
+    const nodes = all(now).slice(1)
+    if (nodes.length === 0) break
+    const x = nodes[draw(nodes.length)]!
+    const parent = all(now).find(n => n.kids.includes(x))!
+    const op = draw(4)
+    if (op === 0) x.text = `${x.text} expanded`
+    else if (op === 2) x.kids.splice(draw(x.kids.length + 1), 0, tree(draw(2)))
+    else {
+      parent.kids.splice(parent.kids.indexOf(x), 1)
+      if (op === 3) {
+        const to = all(now)[draw(all(now).length)]!
+        to.kids.splice(draw(to.kids.length + 1), 0, x)
+      }
+    }
+  }
+  return { last: lines(last), now: lines(now) }
+}
+
+const RUN = /^ {2}\s*… (\d+) lines? as before$/
+const GONE = / \(and the (\d+) lines? in it\)$/
+
+// The snapshot again from the last one and its changes, as a careful reader takes them: a run and an
+// unchanged line copy the last one's lines in turn, a changed line takes the place of one, a gone
+// one drops it and the lines it says were in it, a new one adds itself.
+const readBack = (last: readonly string[], changes: readonly string[]) => {
+  if (changes.length === 0) return [...last]
+  const out: string[] = []
+  let i = 0
+  for (const c of changes) {
+    const run = RUN.exec(c)
+    if (run) {
+      out.push(...last.slice(i, i + Number(run[1])))
+      i += Number(run[1])
+      continue
+    }
+    const line = c.slice(2)
+    if (c[0] === ' ') {
+      expect(line).toBe(last[i])
+      out.push(line)
+      i++
+    } else if (c[0] === '~') {
+      out.push(line)
+      i++
+    } else if (c[0] === '+') out.push(line)
+    else i += 1 + Number(GONE.exec(line)?.[1] ?? 0)
+  }
+  expect(i).toBe(last.length)
+  return out
+}
+
+test('a snapshot told by its changes reads back as it is, each new or changed line under the line it is in', () => {
+  const indent = (line: string) => line.length - line.trimStart().length
+  for (let seed = 1; seed <= 1000; seed++) {
+    const { last, now } = drawPages(seed)
+    const changes = snapshotChanges(last, now)!
+    expect({ seed, now: readBack(last, changes) }).toEqual({ seed, now })
+    // The nearest line above a new or changed one with less indent, a run or a gone line passed
+    // over, is the line it is in now.
+    const parentNow = new Map(now.map((l, k) => [l.trim(), now.slice(0, k).reverse().find(p => indent(p) < indent(l))?.trim()]))
+    changes.forEach((c, k) => {
+      if (c[0] !== '+' && c[0] !== '~') return
+      const above = changes
+        .slice(0, k)
+        .reverse()
+        .find(p => !RUN.test(p) && p[0] !== '-' && indent(p.slice(2)) < indent(c.slice(2)))
+      expect({ seed, line: c.trim(), in: above?.slice(2).trim() }).toEqual({ seed, line: c.trim(), in: parentNow.get(c.slice(2).trim()) })
+    })
+  }
+})
