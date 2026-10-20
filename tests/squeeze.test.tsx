@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { unescapeSnapshot, unescapeUrl } from '../hooks/chrome'
+import { snapshotChanges, unescapeSnapshot, unescapeUrl } from '../hooks/chrome'
 import { MCP_TOOL, packOf } from '../hooks/packs'
 import { collapseInstances, hoistClasses, imageTokens, outline, OUTLINE_LEGEND, pngSize, REPEAT_MIN, repeatNote, roundNoise, shortenTokens, squeezeText, tokenNote, tokensOf } from '../hooks/squeeze'
 
@@ -507,4 +507,72 @@ test('a Chrome state said again with the value it had is told so; a new value co
   expect(textOf(await call('mcp__chrome_devtools__fill'))).toBe('Successfully filled out the element\nEmulating viewport: (as before)')
   await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'Summed up.', toolUses: [] }] })
   expect(textOf(await call('mcp__chrome_devtools__fill'))).toBe(answers.mcp__chrome_devtools__fill)
+})
+
+const PAGE = [
+  'uid=1_0 RootWebArea "Home" url="https://x.test/"',
+  '  uid=1_1 banner',
+  '    uid=1_2 button "Profile" expandable haspopup="menu"',
+  '    uid=1_3 "Anna"',
+  '  uid=1_4 main',
+  '    uid=1_5 heading "Home" level="1"',
+  '    uid=1_6 list "Sections"',
+  '      uid=1_7 link "Time" url="https://x.test/time"',
+  '      uid=1_8 link "Staff" url="https://x.test/staff"',
+  '      uid=1_9 link "Plans" url="https://x.test/plans"',
+  '    uid=1_10 "Footer note"',
+]
+
+test('a snapshot is told by its changes: new, gone with what was in it, changed, each with the lines it is in', () => {
+  const now = [...PAGE.slice(0, 2), '    uid=1_2 button "Profile" expandable expanded haspopup="menu"', ...PAGE.slice(3, 6), ...PAGE.slice(10), '  uid=2_0 menu "Profile"', '    uid=2_1 menuitem "Sign out"']
+  expect(snapshotChanges(PAGE, now)).toEqual([
+    '  uid=1_0 RootWebArea "Home" url="https://x.test/"',
+    '    uid=1_1 banner',
+    '~     uid=1_2 button "Profile" expandable expanded haspopup="menu"',
+    '      … 1 line as before',
+    '    uid=1_4 main',
+    '      … 1 line as before',
+    '-     uid=1_6 list "Sections" (and the 3 lines in it)',
+    '      … 1 line as before',
+    '+   uid=2_0 menu "Profile"',
+    '+     uid=2_1 menuitem "Sign out"',
+  ])
+  expect(snapshotChanges(PAGE, PAGE)).toEqual([])
+  // A uid on two lines, which no snapshot has: not told.
+  expect(snapshotChanges(PAGE, [...PAGE, PAGE[1]!])).toBeUndefined()
+})
+
+test('a Chrome snapshot is told by its changes since the last; a take_snapshot called next, a new page or a compact brings it whole', async ($, on) => {
+  const result = (head: string, lines: readonly string[]) => `${head}\n## Latest page snapshot\n${lines.join('\n')}\n`
+  // A page long enough that its changes come to little of it.
+  const page = [...PAGE.slice(0, 10), ...Array.from({ length: 30 }, (_, k) => `      uid=1_${k + 11} link "Plan ${k + 1}" url="https://x.test/plans/${k + 1}"`), PAGE[10]!]
+  const opened = [...page.slice(0, 2), '    uid=1_2 button "Profile" expandable expanded haspopup="menu"', ...page.slice(3), '  uid=2_0 menu "Profile"', '    uid=2_1 menuitem "Sign out"']
+  const other = ['uid=3_0 RootWebArea "Staff" url="https://x.test/staff"', ...Array.from({ length: 12 }, (_, k) => `  uid=3_${k + 1} row "Person ${k + 1}"`)]
+  const answers: Record<string, string> = {
+    mcp__chrome_devtools__take_snapshot: result('', page).slice(1),
+    mcp__chrome_devtools__click: result('Successfully clicked on the element', opened),
+    mcp__chrome_devtools__hover: 'Successfully hovered over the element',
+    // The same server by another name, its snapshot the page with the menu open.
+    'mcp__chrome-devtools__take_snapshot': result('', opened).slice(1),
+    mcp__chrome_devtools__navigate_page: result('Successfully navigated to https://x.test/staff.', other),
+  }
+  const { call } = await session($, on, Object.fromEntries(Object.entries(answers).map(([tool, text]) => [tool, [{ type: 'text', text }]])))
+  expect(textOf(await call('mcp__chrome_devtools__take_snapshot'))).toBe(answers.mcp__chrome_devtools__take_snapshot)
+  const told = textOf(await call('mcp__chrome_devtools__click'))
+  expect(told).toMatch(/^Successfully clicked on the element\n## Latest page snapshot, told by its changes since the last one: .* A take_snapshot called next gives it whole\.\n/)
+  expect(told).toContain('\n+   uid=2_0 menu "Profile"\n')
+  expect(told.length).toBeLessThan(answers.mcp__chrome_devtools__click!.length)
+  // Called next, take_snapshot comes whole, the page as it is now.
+  const whole = textOf(await call('mcp__chrome_devtools__take_snapshot'))
+  expect(whole).toMatch(/^## Latest page snapshot\nuid=1_0 RootWebArea/)
+  // A call between a told snapshot and a take_snapshot: the take_snapshot is no call for it whole.
+  await call('mcp__chrome_devtools__click')
+  await call('mcp__chrome_devtools__hover')
+  expect(textOf(await call('mcp__chrome-devtools__take_snapshot'))).toMatch(/^## Latest page snapshot: the same as the last one, its 43 lines as they were\. /)
+  // Another page shares too little to be told by its changes.
+  expect(textOf(await call('mcp__chrome_devtools__navigate_page'))).toBe(answers.mcp__chrome_devtools__navigate_page)
+  expect(textOf(await call('mcp__chrome_devtools__navigate_page'))).toMatch(/\n## Latest page snapshot: the same as the last one, its 13 lines as they were\. /)
+  // A compact starts it over.
+  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'Summed up.', toolUses: [] }] })
+  expect(textOf(await call('mcp__chrome_devtools__navigate_page'))).toBe(answers.mcp__chrome_devtools__navigate_page)
 })

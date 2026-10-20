@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Seen, Stat, Total } from '../types'
+import type { Memory, Seen, Stat, Total } from '../types'
 import { groupOf, MCP_TOOL, OTHER, packOf, switches } from './packs'
 import { hash, imageNote, imageTokens, isRepeatIn, pngSize, squeezeBlock } from './squeeze'
 
@@ -10,6 +10,8 @@ import { hash, imageNote, imageTokens, isRepeatIn, pngSize, squeezeBlock } from 
 // '' the main one.
 const seenAtom = atom({ plugin: 'mcp-squeeze', key: 'seen' } as const, {} as Record<string, Seen>)
 const statsAtom = atom({ plugin: 'mcp-squeeze', key: 'stats' } as const, {} as Record<string, Stat>)
+// What the packs hold of each agent's conversation (a page's last snapshot), by agent as `seen` is.
+const memoryAtom = atom({ plugin: 'mcp-squeeze', key: 'memory' } as const, {} as Record<string, Memory>)
 
 const OFF_KEY = 'off'
 // Kept true while a pack, or the tools no pack takes, is off by itself: `off:figma`, `off:other`.
@@ -52,6 +54,7 @@ const imageOf = (b: Block) => {
 // out; with the images left out and the tokens they would have cost.
 async function squeeze($: EngineInterface, tool: string, agent: string, blocks: readonly Block[]) {
   const seen = { ...((await read($, seenAtom))[agent] ?? {}) }
+  const memory = { ...((await read($, memoryAtom))[agent] ?? {}) }
   let images = 0
   let imageCost = 0
   const out = blocks.map((b): Block => {
@@ -66,10 +69,11 @@ async function squeeze($: EngineInterface, tool: string, agent: string, blocks: 
       return { type: 'text', text: imageNote(image.mimeType, size) }
     }
     if (b.type !== 'text' || typeof b.text !== 'string') return b
-    const { text } = squeezeBlock(tool, b.text, seen)
+    const { text } = squeezeBlock(tool, b.text, seen, memory)
     return text === b.text ? b : { ...b, text }
   })
   await update($, seenAtom, all => ({ ...all, [agent]: seen }))
+  await update($, memoryAtom, all => ({ ...all, [agent]: memory }))
   return { blocks: out, images, imageCost }
 }
 
@@ -219,7 +223,10 @@ export const register: Register = on => {
   // worked out ahead of time (`precompute`), which leaves the context as it was.
   on('session.compact', async ($, e, next) => {
     const ran = await next(e)
-    if (e.trigger !== 'precompute' && ran.skip === undefined) await update($, seenAtom, all => ({ ...all, [e.agentId ?? '']: {} }))
+    if (e.trigger !== 'precompute' && ran.skip === undefined) {
+      await update($, seenAtom, all => ({ ...all, [e.agentId ?? '']: {} }))
+      await update($, memoryAtom, all => ({ ...all, [e.agentId ?? '']: {} }))
+    }
     return ran
   }).catch(($, e, next) => next(e))
 
@@ -228,6 +235,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (e.reason === 'clear') {
       await update($, seenAtom, () => ({}))
+      await update($, memoryAtom, () => ({}))
       await update($, statsAtom, () => ({}))
     }
     return ran

@@ -68,6 +68,7 @@ const wasSqueezed = (tool, text) =>
 for (const file of files) {
   const names = new Map()
   const seen = {}
+  const memory = {}
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
     if (!line.includes('mcp__') && !line.includes('tool_result')) continue
     let record
@@ -105,7 +106,7 @@ for (const file of files) {
           continue
         }
         if (x.type !== 'text' || typeof x.text !== 'string') continue
-        const { packed, text } = squeezeBlock(tool, x.text, seen)
+        const { packed, text } = squeezeBlock(tool, x.text, seen, memory)
         s.before += x.text.length
         s.packed += packed.length
         s.after += text.length
@@ -156,7 +157,7 @@ const width = Math.max(...[...rows, ...totals].map(r => r.label.length))
 const line = ({ label, s }) =>
   `${label.padEnd(width)} ${String(s.calls).padStart(6)} ${k(tokens(s.before)).padStart(8)} ${k(byPack(s)).padStart(8)} ${k(byRepeats(s)).padStart(8)} ${`${s.images}${s.images ? ` (${k(s.imageTokens)})` : ''}`.padStart(12)} ${k(saved(s)).padStart(8)} ${String(cost(s) === 0 ? 0 : Math.round((100 * saved(s)) / cost(s))).padStart(4)}%`
 
-console.log(`Tokens estimated at ${CHARS_PER_TOKEN} characters a token, a PNG image at a token per 750 pixels; "repeats" is a block, a state line and a token said before; "of" is of the text and images as they came.`)
+console.log(`Tokens estimated at ${CHARS_PER_TOKEN} characters a token, a PNG image at a token per 750 pixels; "repeats" is a block, a state line, a token and a snapshot's unchanged lines said before; "of" is of the text and images as they came.`)
 console.log('')
 console.log(`${''.padEnd(width)} ${'calls'.padStart(6)} ${'text'.padStart(8)} ${'by pack'.padStart(8)} ${'repeats'.padStart(8)} ${'images'.padStart(12)} ${'saved ≈'.padStart(8)} ${'of'.padStart(5)}`)
 for (const group of servers) {

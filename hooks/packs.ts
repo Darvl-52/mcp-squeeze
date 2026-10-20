@@ -1,5 +1,6 @@
 // The packs: each one squeezes the tools of the MCP servers it knows, by what each tool returns. A
 // tool no pack takes has only what the mod does to every MCP tool (repeats left out).
+import type { Memory } from '../types'
 import { chrome } from './chrome.ts'
 import { figma } from './figma.ts'
 
@@ -19,6 +20,11 @@ export type Pack = {
   // One text block of the tool's result, squeezed; the caller keeps the original where it is no
   // shorter.
   squeezeText: (tool: string, text: string) => string
+  // The block squeezed, as the pack tells it by what it holds of this agent's conversation:
+  // `memory`, its keys under its id, kept up for the next (a page's last snapshot); `isAgain` for
+  // the copy the model called for again, after one left out. `isWhole` where the pack gives it
+  // whole as the model called for it so, which no repeat then leaves out.
+  tell?: (tool: string, text: string, memory: Memory, isAgain: boolean) => { text: string; isWhole?: boolean }
 }
 
 export const packs: readonly Pack[] = [figma, chrome]

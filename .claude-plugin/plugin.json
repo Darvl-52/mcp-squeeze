@@ -1,7 +1,7 @@
 {
   "name": "mcp-squeeze",
-  "version": "0.4.0",
-  "description": "Squeezes what the MCP tools return before the model reads it: a block, an image or a long token returned again left out, from any server; for Figma, metadata as an outline, an instance whose inside is its component's told in a line, repeated classes declared once, float noise rounded; for Chrome DevTools, a state said once and a snapshot's URLs in letters; /squeeze-gain says the tokens saved.",
+  "version": "0.5.0",
+  "description": "Squeezes what the MCP tools return before the model reads it: a block, an image or a long token returned again left out, from any server; for Figma, metadata as an outline, an instance whose inside is its component's told in a line, repeated classes declared once, float noise rounded; for Chrome DevTools, a state said once, a snapshot's URLs in letters and a snapshot told by its changes; /squeeze-gain says the tokens saved.",
   "types": "./types/index.d.ts",
   "author": { "name": "Darvl-52" },
   "repository": "https://github.com/Darvl-52/mcp-squeeze"

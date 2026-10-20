@@ -1,6 +1,6 @@
 // What the mod does to the text an MCP tool returns, whichever pack squeezes it, and the notes it
 // leaves where a repeat was left out. What each pack does to its own tools is in its file.
-import type { Seen } from '../types'
+import type { Memory, Seen } from '../types'
 import { packOf, packs } from './packs.ts'
 
 export { collapseInstances, hoistClasses, isCode, outline, OUTLINE_LEGEND, roundNoise } from './figma.ts'
@@ -76,19 +76,27 @@ const tellStates = (text: string, states: readonly RegExp[], pack: string, seen:
     })
     .join('\n')
 
-// One text block as the model is to read it, by what this agent's conversation holds (`seen`, kept
-// up for the next): squeezed by its pack, left out where the same came whole before, or else each
-// state line that says what the last did told so and each token that came whole before told by a
-// note. The copy after one left out is the one the model called for again, its earlier copy out of
-// view: it comes whole, states and tokens and all. With the text its pack alone made of it.
-export const squeezeBlock = (tool: string, text: string, seen: Seen) => {
+// One text block as the model is to read it, by what this agent's conversation holds (`seen` and
+// the packs' `memory`, kept up for the next): squeezed by its pack and told as its pack tells it,
+// left out where the same came whole before, or else each state line that says what the last did
+// told so and each token that came whole before told by a note. The copy after one left out is the
+// one the model called for again, its earlier copy out of view: it comes whole, states and tokens
+// and all. With the text its pack alone made of it.
+export const squeezeBlock = (tool: string, text: string, seen: Seen, memory: Memory) => {
   const packed = squeezeText(tool, text)
   const key = hash(packed)
   const isLong = packed.length >= REPEAT_MIN
-  const isAgain = isLong && seen[key] === 'pointed'
-  if (isLong && isRepeatIn(seen, key)) return { packed, text: repeatNote(packed) }
   const pack = packOf(tool)
-  const stated = pack?.states ? tellStates(packed, pack.states, pack.id, seen, isAgain) : packed
+  // Told whatever comes of it, so what the pack holds is what the model reads now.
+  const tale = pack?.tell?.(tool, packed, memory, isLong && seen[key] === 'pointed')
+  const told = tale?.text ?? packed
+  const isAgain = (isLong && seen[key] === 'pointed') || tale?.isWhole === true
+  if (isAgain && isLong) seen[key] = 'whole'
+  else if (isLong && isRepeatIn(seen, key)) {
+    const note = repeatNote(packed)
+    return { packed, text: told.length < note.length ? told : note }
+  }
+  const stated = pack?.states ? tellStates(told, pack.states, pack.id, seen, isAgain) : told
   if (!isAgain) return { packed, text: shortenTokens(stated, k => isRepeatIn(seen, k)) }
   for (const t of tokensOf(stated)) seen[tokenKey(t)] = 'whole'
   return { packed, text: stated }

@@ -1,6 +1,7 @@
 // The Chrome DevTools pack: what the mod does to the text the Chrome DevTools server's tools return
 // (`chrome-devtools`, `chrome_devtools`, `chrome-devtools-mcp`). It keeps what the model acts on
 // (every uid, role, name, value, URL) and drops only what spells it long.
+import type { Memory } from '../types'
 import type { Pack } from './packs.ts'
 
 // A run of percent-escapes of bytes past ASCII, as UTF-8 writes a character past it.
@@ -36,10 +37,136 @@ export const unescapeSnapshot = (text: string) => {
   return text.slice(0, at) + text.slice(at).replace(URL_ATTR, (all, url: string) => ` url="${unescapeUrl(url)}"`)
 }
 
+// A snapshot's line: its indent, then its node's uid, which the node keeps from one snapshot to the
+// next while it is on the page.
+const NODE = /^(\s*)uid=(\S+)(?:\s|$)/
+const HEADING = '## Latest page snapshot'
+
+type Mark = ' ' | '+' | '-' | '~'
+type Entry = { mark: Mark; line: string; keep: boolean }
+
+const indentOf = (line: string) => line.length - line.trimStart().length
+const uidOf = (line: string) => NODE.exec(line)![2]!
+
+// The longest run of `positions` that only rises, as their indexes: the nodes of a snapshot in the
+// order they had in the last one.
+const rising = (positions: readonly number[]) => {
+  const tails: number[] = []
+  const before: number[] = []
+  positions.forEach((p, k) => {
+    if (p < 0) return
+    let lo = 0
+    let hi = tails.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (positions[tails[mid]!]! < p) lo = mid + 1
+      else hi = mid
+    }
+    before[k] = lo > 0 ? tails[lo - 1]! : -1
+    tails[lo] = k
+  })
+  const out = new Set<number>()
+  for (let k = tails.at(-1) ?? -1; k >= 0; k = before[k]!) out.add(k)
+  return out
+}
+
+// The snapshot `now` told by its changes since `last`, both its lines: each line marked new (+),
+// gone (-, a node gone with all in it told once) or changed (~), with the lines above it it is in,
+// and each run of lines as they were told by their count. Undefined where a node's uid is on two
+// lines, which no snapshot has.
+export const snapshotChanges = (last: readonly string[], now: readonly string[]) => {
+  const lastAt = new Map(last.map((line, k) => [uidOf(line), k]))
+  if (lastAt.size !== last.length || new Set(now.map(uidOf)).size !== now.length) return undefined
+  const positions = now.map(line => lastAt.get(uidOf(line)) ?? -1)
+  const kept = rising(positions)
+  const entries: Entry[] = []
+  let i = 0
+  const gone = (to: number) => {
+    // A run of lines gone: each told, but for a line in one told before it.
+    let under = Infinity
+    for (; i < to; i++) {
+      const line = last[i]!
+      if (indentOf(line) > under) continue
+      under = indentOf(line)
+      const inside = last.slice(i + 1).findIndex(l => indentOf(l) <= under)
+      const count = inside < 0 ? last.length - i - 1 : inside
+      entries.push({ mark: '-', line: count ? `${line} (and the ${count} ${count === 1 ? 'line' : 'lines'} in it)` : line, keep: true })
+    }
+  }
+  now.forEach((line, k) => {
+    if (!kept.has(k)) {
+      entries.push({ mark: '+', line, keep: true })
+      return
+    }
+    gone(positions[k]!)
+    i = positions[k]! + 1
+    entries.push(line === last[positions[k]!] ? { mark: ' ', line, keep: false } : { mark: '~', line, keep: true })
+  })
+  gone(last.length)
+  // Each change keeps the lines it is in, the nearest above it of each lesser indent.
+  const open: Entry[] = []
+  for (const entry of entries) {
+    const indent = indentOf(entry.line)
+    while (open.length && indentOf(open.at(-1)!.line) >= indent) open.pop()
+    if (entry.mark !== ' ') for (const parent of open) parent.keep = true
+    if (entry.mark !== '-') open.push(entry)
+  }
+  if (entries.every(e => e.mark === ' ')) return []
+  const out: string[] = []
+  for (let k = 0; k < entries.length; ) {
+    const entry = entries[k]!
+    if (entry.keep) {
+      out.push(`${entry.mark} ${entry.line}`)
+      k++
+      continue
+    }
+    // A run as deep as its first line or deeper, so the count stays in what that line is in.
+    let end = k
+    while (end < entries.length && !entries[end]!.keep && indentOf(entries[end]!.line) >= indentOf(entry.line)) end++
+    out.push(`  ${' '.repeat(indentOf(entry.line))}… ${end - k} ${end - k === 1 ? 'line' : 'lines'} as before`)
+    k = end
+  }
+  return out
+}
+
+// A snapshot told by its changes is used where it comes to this part of the whole, or less.
+const CHANGES_AT_MOST = 0.6
+
+// A result with its snapshot told by its changes since the last one this agent read, as the pack
+// remembers it: where there is one, the changes come to little enough, and this is no copy called
+// for again nor a take_snapshot called next after a snapshot told so, which come whole. Either way
+// the snapshot is remembered as the one the model reads now.
+const tellSnapshot = (tool: string, text: string, memory: Memory, isAgain: boolean): { text: string; isWhole?: boolean } => {
+  const lines = text.split('\n')
+  const at = lines.indexOf(HEADING)
+  let end = at + 1
+  while (at >= 0 && end < lines.length && NODE.test(lines[end]!)) end++
+  const wasTold = memory['chrome:told'] === 'yes'
+  // Any call between a snapshot told so and a take_snapshot makes the take_snapshot no call for it.
+  memory['chrome:told'] = 'no'
+  if (at < 0 || end === at + 1) return { text }
+  const now = lines.slice(at + 1, end)
+  const last = memory['chrome:snapshot']
+  memory['chrome:snapshot'] = now.join('\n')
+  if (wasTold && tool.endsWith('__take_snapshot')) return { text, isWhole: true }
+  if (last === undefined || isAgain) return { text }
+  const changes = snapshotChanges(last.split('\n'), now)
+  if (!changes) return { text }
+  const head =
+    changes.length === 0
+      ? [`${HEADING}: the same as the last one, its ${now.length} lines as they were. A take_snapshot called next gives it whole.`]
+      : [`${HEADING}, told by its changes since the last one: + a line new, - gone, ~ changed, each with the lines it is in; "…" lines as they were. A take_snapshot called next gives it whole.`, ...changes]
+  const whole = now.join('\n').length
+  if (head.join('\n').length > whole * CHANGES_AT_MOST) return { text }
+  memory['chrome:told'] = 'yes'
+  return { text: [...lines.slice(0, at), ...head, ...lines.slice(end)].join('\n') }
+}
+
 export const chrome: Pack = {
   id: 'chrome',
   server: /.*chrome[-_]?dev[-_]?tools.*/,
   // What it emulates (`Emulating viewport: {…}`), said again after each call while it lasts.
   states: [/^(Emulating[^:\n]*: )(.+)$/],
   squeezeText: (tool, text) => unescapeSnapshot(text),
+  tell: tellSnapshot,
 }

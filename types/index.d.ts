@@ -11,10 +11,15 @@ export type Total = { since: number; tools: Record<string, Stat> }
 // next one is left out; `pointed` it was left out, so the next goes whole.
 export type Seen = Record<string, 'whole' | 'pointed'>
 
+// What the packs hold of one agent's conversation, each under keys of its id (`chrome:snapshot`, the
+// last page snapshot as the model knows it).
+export type Memory = Record<string, string>
+
 declare module 'claude-code' {
   interface PluginState {
     'mcp-squeeze': {
       seen: Record<string, Seen>
+      memory: Record<string, Memory>
       stats: Record<string, Stat>
     }
   }

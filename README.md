@@ -72,6 +72,24 @@ And a pack for each kind of MCP server it knows, a file in `hooks/` listed in `h
   `url="…"` is written as itself: `title=%D0%9F%D0%BB%D0%B0%D0%BD` becomes `title=План`, the same
   URL to a browser. An escaped ASCII character (`%20`, `%2F`, `%26`) stays, as do a character that
   does not show and every URL outside the snapshot (a request's, a script's result).
+- **A snapshot told by its changes.** A node keeps its uid from one snapshot to the next, so a
+  snapshot, `take_snapshot`'s or the one after a click, a fill, a wait, comes as what changed
+  since the last one: a line new (`+`), gone (`-`, with how many lines were in it) or changed
+  (`~`), each with the lines it is in, and `… 33 lines as before` for the rest; a page the same as
+  the last says so in a line. A `take_snapshot` called next comes whole, as does a snapshot whose
+  changes would come to more than 60% of it (another page). A compact, a `/clear` and each
+  subagent start over.
+
+  ```
+  ## Latest page snapshot, told by its changes since the last one: + a line new, - gone, ~ changed, …
+    uid=7_0 RootWebArea "Home" url="https://example.com/home"
+      uid=7_1 banner
+  ~     uid=7_2 button "Profile" expandable expanded haspopup="menu"
+        … 3 lines as before
+      … 33 lines as before
+  +   uid=8_0 menu "Profile" orientation="vertical"
+  +     uid=8_1 menuitem "Sign out"
+  ```
 
 ## Commands
 
